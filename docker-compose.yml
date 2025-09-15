@@ -1,0 +1,60 @@
+name: cnc-api
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: cnc_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-appdb}
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-app_password}
+      MYSQL_TCP_PORT: ${MYSQL_PORT:-3306}
+    # Expose to host only if you need to connect from your host:
+    # ports:
+    #   - "${HOST_MYSQL_PORT:-3312}:${MYSQL_PORT:-3306}"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      # note the double $ to escape for the shell
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cnc_api
+    ports:
+      - "${HOST_APP_PORT:-3000}:${PORT:-3000}"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: ${PORT:-3000}
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-appdb}
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-app_password}
+      MYSQL_POOL_LIMIT: ${MYSQL_POOL_LIMIT:-10}
+      MYSQL_POOL_MIN: ${MYSQL_POOL_MIN:-0}
+      MYSQL_POOL_ACQUIRE: ${MYSQL_POOL_ACQUIRE:-30000}
+      MYSQL_POOL_IDLE: ${MYSQL_POOL_IDLE:-10000}
+      DB_LOG_SQL: ${DB_LOG_SQL:-false}
+      JWT_SECRET: ${JWT_SECRET:-change_me_prod}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change_me_prod_refresh}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+   
+volumes:
+  mysql_data:
