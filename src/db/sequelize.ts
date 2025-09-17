@@ -1,33 +1,62 @@
 // src/db/sequelize.ts
 /**
- * Sequelize bootstrap & DB utilities.
- * - Uses centralized config + sequelizeOptions
- * - Provides init (connect), ping (health), close (shutdown), and signal hooks
+ * Sequelize bootstrap & DB utilities (sequelize-typescript).
  */
-import { Sequelize } from 'sequelize';
-import { sequelizeOptions } from '../config/sequelize.config.js';
+import { Sequelize } from 'sequelize-typescript';
+import { config } from '../config/env.js';
+import { UserModel } from '../models/user.model.js';
+import { AuthorizationModel } from '../models/authorization.model.js';
 
-export const sequelize = new Sequelize(sequelizeOptions);
+const logging = config.dbLogSql ? (sql: string) => console.log(sql) : false;
 
-/** Connect and verify the DB (fails fast on startup if unreachable). */
+export const sequelize = new Sequelize({
+  dialect: 'mysql',
+  host: config.mysqlHost,
+  port: config.mysqlPort,
+  database: config.mysqlDatabase,
+  username: config.mysqlUser,
+  password: config.mysqlPassword,
+  logging,
+  pool: config.mysqlPool,
+  models: [UserModel, AuthorizationModel], // <-- register all models here
+  define: { timestamps: true, underscored: false },
+  timezone: '+00:00',
+});
+
+/** Connect and (optionally) sync schema based on config.dbSync. */
 export async function initDb(): Promise<void> {
   await sequelize.authenticate();
-  // Optionally: await sequelize.sync(); // if you use sync in dev
+
+  switch (config.dbSync) {
+    case 'sync':
+      await sequelize.sync();
+      console.log('🗄️  DB sync: sync');
+      break;
+    case 'alter':
+      await sequelize.sync({ alter: true });
+      console.log('🗄️  DB sync: alter');
+      break;
+    case 'force':
+      await sequelize.sync({ force: true });
+      console.log('🗄️  DB sync: force (tables dropped & recreated)');
+      break;
+    case 'none':
+    default:
+      console.log('🗄️  DB sync: none (no schema changes on boot)');
+      break;
+  }
+
   console.log('✅ Sequelize connected');
 }
 
-/** Health check (throws on failure). */
 export async function pingDb(): Promise<void> {
   await sequelize.authenticate();
-  // Or: await sequelize.query('SELECT 1');
 }
 
-/** Gracefully close the Sequelize connection pool. */
 export async function closeDb(): Promise<void> {
   await sequelize.close();
 }
 
-/** Register SIGINT/SIGTERM hooks for graceful shutdown. */
 export function registerDbShutdown(): void {
   const handler = async () => {
     try {

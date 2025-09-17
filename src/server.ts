@@ -1,16 +1,12 @@
 // src/server.ts
 /**
  * Express server bootstrap with Sequelize DB connection & unified health at "/".
+ * Uses the shared Express app from src/app.ts.
  */
-import express from 'express';
-import dotenv from 'dotenv';
+import 'dotenv/config';
+import { app } from './app.js';
 import { initDb, pingDb, registerDbShutdown } from './db/sequelize.js';
 import { config } from './config/env.js';
-
-dotenv.config();
-
-const app = express();
-app.use(express.json());
 
 // helpful behind reverse proxies
 app.set('trust proxy', true);
@@ -44,7 +40,7 @@ app.get('/', async (_req, res) => {
   const payload = {
     service: 'LAO MARKET API',
     status: 'ok', // app status
-    env: process.env.NODE_ENV ?? 'development',
+    env: config.nodeEnv,
     port: config.port,
     uptimeSec: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
@@ -55,10 +51,11 @@ app.get('/', async (_req, res) => {
   res.status(dbStatus === 'ok' ? 200 : 503).json(payload);
 });
 
-//
+// Health endpoints
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
+
 app.get('/health/db', async (_req, res) => {
   try {
     await withTimeout(pingDb(), 1500);
