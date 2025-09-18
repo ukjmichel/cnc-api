@@ -35,19 +35,10 @@ import { NotFoundError, DuplicateError, AuthError } from '../errors/index.js';
 import { sequelize } from '../db/sequelize.js';
 import { UserModel } from '../models/user.model.js';
 import { AuthorizationModel } from '../models/authorization.model.js';
+import { withTransaction } from '../utils/tx.js';
 
 type Role = 'user' | 'employee' | 'administrator';
 
-/**
- * Run a function inside a transaction and auto-commit/rollback.
- */
-async function withTransaction<T>(
-  work: (t: Transaction) => Promise<T>,
-  options?: TransactionOptions
-): Promise<T> {
-  if (options) return sequelize.transaction(options, (t) => work(t));
-  return sequelize.transaction((t) => work(t));
-}
 
 /** Normalize roles input to an array. */
 function normalizeRoles(input?: Role | Role[]): Role[] | undefined {

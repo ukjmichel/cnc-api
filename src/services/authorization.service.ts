@@ -14,21 +14,12 @@
  * =============================================================================
  */
 
-import { Transaction } from 'sequelize';
-import { sequelize } from '../db/sequelize.js';
-import {
-  AuthorizationModel,
-  type Role,
-} from '../models/authorization.model.js';
+import { AuthorizationModel, Role } from '../models/authorization.model.js';
 import { UserModel } from '../models/user.model.js';
 import { NotFoundError } from '../errors/index.js';
+import { withTransaction } from '../utils/tx.js';
 
 /** Run a function inside a transaction with auto-commit/rollback. */
-async function withTransaction<T>(
-  work: (t: Transaction) => Promise<T>
-): Promise<T> {
-  return sequelize.transaction((t) => work(t));
-}
 
 export class AuthorizationService {
   /**

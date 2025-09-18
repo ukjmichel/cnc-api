@@ -19,22 +19,18 @@ export type UserCreationAttributes = Optional<
 export type StringMatch = 'exact' | 'like' | 'startsWith' | 'endsWith';
 
 export interface UserFilters {
-  // match single value or any-of list
   userId?: string | string[];
   username?: string | string[];
   firstName?: string | string[];
   lastName?: string | string[];
   email?: string | string[];
-
   verified?: boolean;
 
-  // date ranges (inclusive)
   createdAtFrom?: string | Date;
   createdAtTo?: string | Date;
   updatedAtFrom?: string | Date;
   updatedAtTo?: string | Date;
 
-  // how to match string fields (default: 'like')
   match?: StringMatch;
 }
 
@@ -75,6 +71,7 @@ export interface ListUsersQuery {
     | 'username'
     | 'firstName'
     | 'lastName'
-    | 'email';
+    | 'email'
+    | 'role'; // <-- add role here
   orderDir?: 'ASC' | 'DESC';
 }

@@ -3,8 +3,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import type { JwtUser } from '../types/auth.js';
+import { config } from '../config/env.js';
 
-const { JWT_SECRET = 'dev_secret' } = process.env;
+const JWT_SECRET = config.jwtSecret;
 
 export interface AuthenticatedRequest extends Request {
   user?: JwtUser;

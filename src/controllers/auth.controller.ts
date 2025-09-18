@@ -30,10 +30,10 @@ import type { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/auth.service.js';
 import {
   AuthorizationModel,
-  type Role,
 } from '../models/authorization.model.js';
 import type { AuthenticatedRequest } from '../middlewares/requireAuth.js';
 import type { LoginDTO, RegisterDTO } from '../types/auth.js';
+import { Role } from '../types/authorization.js';
 
 /**
  * Set access & refresh cookies using the AuthService cookie spec.

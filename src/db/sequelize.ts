@@ -6,6 +6,7 @@ import { Sequelize } from 'sequelize-typescript';
 import { config } from '../config/env.js';
 import { UserModel } from '../models/user.model.js';
 import { AuthorizationModel } from '../models/authorization.model.js';
+import { ProductModel } from '../models/product.model.js';
 
 const logging = config.dbLogSql ? (sql: string) => console.log(sql) : false;
 
@@ -18,7 +19,7 @@ export const sequelize = new Sequelize({
   password: config.mysqlPassword,
   logging,
   pool: config.mysqlPool,
-  models: [UserModel, AuthorizationModel], // <-- register all models here
+  models: [UserModel, AuthorizationModel,ProductModel], // <-- register all models here
   define: { timestamps: true, underscored: false },
   timezone: '+00:00',
 });

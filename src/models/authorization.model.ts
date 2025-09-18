@@ -18,16 +18,11 @@ import {
 } from 'sequelize-typescript';
 import { Optional } from 'sequelize';
 import { UserModel } from './user.model.js';
-
-export type Role = 'user' | 'employee' | 'administrator';
-
-export interface AuthorizationAttributes {
-  userId: string;
-  role: Role;
-}
-
-export interface AuthorizationCreationAttributes
-  extends Optional<AuthorizationAttributes, 'role'> {}
+import {
+  AuthorizationAttributes,
+  AuthorizationCreationAttributes,
+  Role,
+} from '../types/authorization.js';
 
 @Table({ tableName: 'authorization', timestamps: true })
 export class AuthorizationModel
@@ -68,3 +63,5 @@ export class AuthorizationModel
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 }
+export { Role };
+

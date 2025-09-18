@@ -18,20 +18,7 @@ import {
 } from 'sequelize-typescript';
 import bcrypt from 'bcrypt';
 import { Optional } from 'sequelize';
-
-// ----- Types -----
-export interface UserAttributes {
-  userId: string;
-  username: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  password: string;
-  verified: boolean;
-}
-
-export interface UserCreationAttributes
-  extends Optional<UserAttributes, 'userId' | 'verified'> {}
+import { UserAttributes, UserCreationAttributes } from '../types/user';
 
 // ----- Model -----
 @Table({

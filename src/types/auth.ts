@@ -1,3 +1,6 @@
+import { Optional } from 'sequelize';
+import { Role } from './authorization';
+
 export interface JwtUser {
   userId: string;
   username: string;

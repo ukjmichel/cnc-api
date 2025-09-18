@@ -18,8 +18,7 @@ import cookieParser from 'cookie-parser';
 import { authRouter } from './routes/auth.route.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { userRouter } from './routes/user.route.js';
-
-
+import productRouter from './routes/product.route.js';
 
 export const app = express();
 
@@ -31,5 +30,6 @@ app.use(cookieParser());
 /** Routes */
 app.use('/api/auth', authRouter);
 app.use('/api/users', userRouter);
+app.use('/api/products', productRouter);
 
 app.use(errorHandler);
