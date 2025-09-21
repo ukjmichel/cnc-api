@@ -1,4 +1,18 @@
-// src/routes/product.routes.ts
+import { Router } from 'express';
+import { ProductController } from '../controllers/product.controller.js';
+import { requireAuth } from '../middlewares/requireAuth.js';
+import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
+import { validate } from '../middlewares/validate.js';
+import {
+  vCreateProduct,
+  vUpdateProduct,
+  vListProducts,
+  vFilterProducts,
+  vGetByCode,
+  vParamId,
+} from '../validators/product.validators.js';
+
+const productRouter = Router();
 
 /**
  * =============================================================================
@@ -23,13 +37,6 @@
  *  - Protected (employee/admin): create, update, delete
  * =============================================================================
  */
-
-import { Router } from 'express';
-import { ProductController } from '../controllers/product.controller.js';
-import { requireAuth } from '../middlewares/requireAuth.js';
-import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
-
-const productRouter = Router();
 
 /**
  * @swagger
@@ -148,6 +155,8 @@ productRouter.post(
   '/',
   requireAuth,
   requireEmployeeOrAdmin,
+  vCreateProduct,
+  validate,
   ProductController.create
 );
 
@@ -193,7 +202,7 @@ productRouter.post(
  *       500:
  *         description: Internal error
  */
-productRouter.get('/', ProductController.list);
+productRouter.get('/', vListProducts, validate, ProductController.list);
 
 /**
  * @swagger
@@ -239,7 +248,12 @@ productRouter.get('/', ProductController.list);
  *       500:
  *         description: Internal error
  */
-productRouter.get('/filter', ProductController.filter);
+productRouter.get(
+  '/filter',
+  vFilterProducts,
+  validate,
+  ProductController.filter
+);
 
 /**
  * @swagger
@@ -267,7 +281,12 @@ productRouter.get('/filter', ProductController.filter);
  *       500:
  *         description: Internal error
  */
-productRouter.get('/by-code', ProductController.getByCode);
+productRouter.get(
+  '/by-code',
+  vGetByCode,
+  validate,
+  ProductController.getByCode
+);
 
 /**
  * @swagger
@@ -292,7 +311,7 @@ productRouter.get('/by-code', ProductController.getByCode);
  *       500:
  *         description: Internal error
  */
-productRouter.get('/:id', ProductController.getById);
+productRouter.get('/:id', vParamId, validate, ProductController.getById);
 
 /**
  * @swagger
@@ -337,6 +356,9 @@ productRouter.patch(
   '/:id',
   requireAuth,
   requireEmployeeOrAdmin,
+  vParamId,
+  vUpdateProduct,
+  validate,
   ProductController.update
 );
 
@@ -373,6 +395,8 @@ productRouter.delete(
   '/:id',
   requireAuth,
   requireEmployeeOrAdmin,
+  vParamId,
+  validate,
   ProductController.remove
 );
 

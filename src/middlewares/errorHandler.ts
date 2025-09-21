@@ -1,109 +1,202 @@
 // src/middlewares/errorHandler.ts
+import type { Request, Response, NextFunction } from 'express';
+import {
+  UniqueConstraintError,
+  ValidationError as SequelizeValidationError,
+  ForeignKeyConstraintError,
+  DatabaseError,
+} from 'sequelize';
 
 /**
  * =============================================================================
- * errorHandler — Centralized Express error middleware
+ * Global Error Handler (Express)
  * =============================================================================
- * What it does
- *  - Catches errors forwarded via `next(err)` from controllers/middleware.
- *  - Maps known domain/library errors to proper HTTP status codes.
- *  - Sends a clean JSON payload; includes stack traces only outside production.
+ * Use as the **last** middleware:
+ *   app.use(errorHandler);
  *
- * Known errors
- *  - NotFoundError     → 404
- *  - DuplicateError    → 409
- *  - AuthError         → 401
- *  - JsonWebTokenError → 401
- *  - TokenExpiredError → 401
- *  - Sequelize:
- *      * UniqueConstraintError → 409 (with details)
- *      * ValidationError       → 400 (with details)
+ * Responsibilities
+ *  - Normalizes known domain errors (BadRequestError, NotFoundError, etc.)
+ *  - Maps common library errors (Sequelize, JWT) to HTTP responses
+ *  - Sends a consistent JSON payload:
+ *      {
+ *        status: <http code>,
+ *        error:  <machine code>,
+ *        message:<human message>,
+ *        details?: <extra>,
+ *        stack?: <dev only>
+ *      }
+ *  - Avoids leaking stack traces in production
  * =============================================================================
  */
 
-import type { Request, Response, NextFunction } from 'express';
-import { ValidationError, UniqueConstraintError } from 'sequelize';
-import jwt from 'jsonwebtoken';
-import { config } from '../config/env.js';
-import { NotFoundError, DuplicateError, AuthError } from '../errors/index.js';
-
-const { JsonWebTokenError, TokenExpiredError } = jwt as unknown as {
-  JsonWebTokenError: new (...args: any[]) => Error;
-  TokenExpiredError: new (...args: any[]) => Error & { expiredAt?: Date };
+type AnyError = Error & {
+  status?: number;
+  code?: string;
+  details?: unknown;
+  // for Sequelize
+  errors?: Array<{ message: string; path?: string | null; value?: unknown }>;
+  fields?: Record<string, unknown>;
+  parent?: unknown;
+  // for JWT libs
+  name?: string;
 };
 
-const isProd = config.nodeEnv === 'production';
+const isProd = process.env.NODE_ENV === 'production';
 
-/**
- * Express error-handling middleware (must have 4 params).
- */
-export function errorHandler(
-  err: any,
-  _req: Request,
-  res: Response,
-  next: NextFunction
-) {
-  // If headers already sent, delegate to Express default handler
-  if (res.headersSent) return next(err);
-
-  // Base status/message
-  let status =
-    (typeof err?.statusCode === 'number' && err.statusCode) ||
-    (typeof err?.status === 'number' && err.status) ||
-    500;
-
-  let code: string | undefined = err?.code || err?.name;
-  let message: string = err?.message || 'Internal Server Error';
-  let details: unknown;
-
-  // Domain errors
-  if (err instanceof NotFoundError) status = 404;
-  else if (err instanceof DuplicateError) status = 409;
-  else if (err instanceof AuthError) status = 401;
-  // JWT errors
-  else if (err instanceof TokenExpiredError) {
-    status = 401;
-    code = 'TOKEN_EXPIRED';
-    message = 'Token expired';
-  } else if (err instanceof JsonWebTokenError) {
-    status = 401;
-    code = 'INVALID_TOKEN';
-    message = 'Invalid token';
+/** Map a thrown error → { status, error, message, details } */
+function normalize(err: AnyError) {
+  // 1) Custom domain errors that set `status` (e.g., BadRequestError, NotFoundError...)
+  if (typeof err.status === 'number') {
+    return {
+      status: err.status,
+      error: err.code || codeFromStatus(err.status) || 'ERROR',
+      message: err.message || 'Error',
+      details: err.details,
+    };
   }
 
-  // Sequelize errors
-  else if (err instanceof UniqueConstraintError) {
-    status = 409;
-    code = 'UNIQUE_CONSTRAINT';
-    details = err.errors?.map((e) => ({
-      path: e.path,
-      message: e.message,
-      value: e.value,
-    }));
-    if (!message || message === 'Internal Server Error') {
-      message = 'Duplicate value violates unique constraint';
-    }
-  } else if (err instanceof ValidationError) {
-    status = 400;
-    code = 'VALIDATION_ERROR';
-    details = err.errors?.map((e) => ({
-      path: e.path,
-      message: e.message,
-      value: e.value,
-      validatorKey: e.validatorKey,
-    }));
-    if (!message || message === 'Internal Server Error') {
-      message = 'Validation failed';
-    }
+  // 2) Sequelize
+  if (err instanceof UniqueConstraintError) {
+    return {
+      status: 409,
+      error: 'DUPLICATE',
+      message: err.message || 'Duplicate value violates a unique constraint.',
+      details: err.errors?.map((e) => ({
+        path: e.path,
+        message: e.message,
+        value: e.value,
+      })),
+    };
+  }
+  if (err instanceof SequelizeValidationError) {
+    return {
+      status: 400,
+      error: 'VALIDATION_ERROR',
+      message: 'Validation failed.',
+      details: err.errors?.map((e) => ({
+        path: e.path,
+        message: e.message,
+        value: e.value,
+      })),
+    };
+  }
+  if (err instanceof ForeignKeyConstraintError) {
+    return {
+      status: 409,
+      error: 'FK_CONSTRAINT',
+      message: 'Operation violates a foreign key constraint.',
+      details: {
+        table: err.table,
+        fields: err.fields,
+        index: err.index,
+      },
+    };
+  }
+  if (err instanceof DatabaseError) {
+    return {
+      status: 500,
+      error: 'DB_ERROR',
+      message: 'A database error occurred.',
+      details: { parent: (err as any).parent },
+    };
+  }
+
+  // 3) JWT errors (no hard import; detect by name)
+  if (err.name === 'TokenExpiredError') {
+    return {
+      status: 401,
+      error: 'TOKEN_EXPIRED',
+      message: 'Authentication token has expired.',
+    };
+  }
+  if (err.name === 'JsonWebTokenError') {
+    return {
+      status: 401,
+      error: 'INVALID_TOKEN',
+      message: 'Invalid authentication token.',
+    };
+  }
+
+  // 4) Fallback
+  return {
+    status: 500,
+    error: 'INTERNAL_SERVER_ERROR',
+    message: err.message || 'Something went wrong.',
+  };
+}
+
+/** Best-effort mapping when a custom error only sets `status` */
+function codeFromStatus(status: number) {
+  switch (status) {
+    case 400:
+      return 'BAD_REQUEST';
+    case 401:
+      return 'UNAUTHORIZED';
+    case 403:
+      return 'FORBIDDEN';
+    case 404:
+      return 'NOT_FOUND';
+    case 409:
+      return 'CONFLICT';
+    case 422:
+      return 'UNPROCESSABLE_ENTITY';
+    case 429:
+      return 'TOO_MANY_REQUESTS';
+    case 500:
+      return 'INTERNAL_SERVER_ERROR';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Express error-handling middleware.
+ * MUST be registered after all routes and other middleware.
+ */
+export function errorHandler(
+  err: AnyError,
+  req: Request,
+  res: Response,
+  _next: NextFunction
+) {
+  // Log with basic request context (avoid noisy stack in prod logs if desired)
+  // You can replace with a proper logger (pino/winston) if available.
+  // eslint-disable-next-line no-console
+  console.error(
+    `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}\n`,
+    err
+  );
+
+  const norm = normalize(err);
+
+  // Don’t double-send if headers already committed
+  if (res.headersSent) {
+    return res.end();
   }
 
   const payload: Record<string, unknown> = {
-    status,
-    error: code || 'Error',
-    message,
-    ...(details ? { details } : {}),
-    ...(isProd ? {} : { stack: err?.stack }),
+    status: norm.status,
+    error: norm.error,
+    message: norm.message,
   };
 
-  res.status(status).json(payload);
+  if (norm.details !== undefined) payload.details = norm.details;
+
+  // Only expose stack in non-production
+  if (!isProd && err.stack) payload.stack = err.stack;
+
+  return res.status(norm.status).json(payload);
+}
+
+/**
+ * Optional 404 "not found" handler for unmatched routes.
+ * Place this BEFORE errorHandler, AFTER all routers:
+ *   app.use(notFoundHandler);
+ */
+export function notFoundHandler(req: Request, res: Response) {
+  return res.status(404).json({
+    status: 404,
+    error: 'NOT_FOUND',
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
 }

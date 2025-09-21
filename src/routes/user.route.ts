@@ -2,18 +2,38 @@
 
 /**
  * =============================================================================
- * User routes — REST endpoints for user management
+ * User Router — REST endpoints for user management
  * =============================================================================
- * Mount under: /api/users
+ * Mount at: /api/users
+ *
+ * Auth
+ *  - All routes require: requireAuth + requireEmployeeOrAdmin
+ *  - Admin-only:
+ *      • POST /employee
+ *      • PATCH /:id/role
+ *
+ * Validation
+ *  - (Optional) express-validator rule sets live in: src/validators/user.validators.ts
+ *  - Validation errors should be forwarded as `ValidationError` and rendered by
+ *    your global error handler middleware.
+ *
+ * Endpoints
+ *  - POST   /                 → create (default role "user")
+ *  - POST   /employee         → createEmployee (assign role "employee")   [Admin]
+ *  - GET    /                 → list (q/role filters, sort, pagination)
+ *  - GET    /filter           → filter (advanced q + role filters)
+ *  - GET    /by-email         → getByEmail (?email=)
+ *  - GET    /by-username      → getByUsername (?username=)
+ *  - GET    /:id              → getById
+ *  - PATCH  /:id              → update (profile fields)
+ *  - PATCH  /:id/password     → changePassword
+ *  - PATCH  /:id/verified     → setVerified
+ *  - DELETE /:id              → remove
+ *  - PATCH  /:id/role         → setRole (AuthorizationModel)              [Admin]
  *
  * Notes
- * - Roles are stored in AuthorizationModel (not on UserModel).
- * - List/filter endpoints accept `?authRole=` (canonical) or `?role=` (alias)
- *   to filter by authorization role at the DB level.
- * - Setting a user's role is done via PATCH /api/users/:id/role.
- * - Access control: all routes require Employee or Admin EXCEPT
- *   - POST /api/users/employee (Admin only)
- *   - PATCH /api/users/:id/role (Admin only)
+ *  - Roles are stored in AuthorizationModel and exposed on the response as
+ *    `authorization.role` (not a top-level `role` on the user).
  * =============================================================================
  */
 

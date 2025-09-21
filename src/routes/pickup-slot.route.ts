@@ -1,6 +1,17 @@
 // src/routes/pickup-slot.route.ts
 import { Router } from 'express';
 import { PickupSlotController } from '../controllers/pickup-slot.controller.js';
+import { requireAuth } from '../middlewares/requireAuth.js';
+import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
+import {
+  vCreatePickupSlot,
+  vListPickupSlots,
+  vFilterPickupSlots,
+  vDeleteByDay,
+  vGeneratePickupSlotsForDay,
+  vGeneratePickupSlotsForMonth,
+  vParamSlotId,
+} from '../validators/pickup-slot.validators.js';
 
 const pickupSlotRouter = Router();
 
@@ -13,6 +24,8 @@ const pickupSlotRouter = Router();
  *      import pickupSlotRouter from './routes/pickup-slot.route.js';
  *      app.use('/api/pickup-slots', pickupSlotRouter);
  *
+ * All endpoints require: requireAuth + requireEmployeeOrAdmin
+ *
  * Endpoints (relative to /api/pickup-slots)
  *  - POST    /                    → create (single slot)
  *  - GET     /                    → list (paging + sort)
@@ -22,11 +35,6 @@ const pickupSlotRouter = Router();
  *  - POST    /generate/month      → generateForMonth (weekly schedule for a month)
  *  - GET     /:slotId             → getById
  *  - DELETE  /:slotId             → remove (delete one slot)
- *
- * Notes
- *  - Controllers return normalized envelopes:
- *      { data: { ... }, meta?: { total, page, pageSize, pages } }
- *  - See src/controllers/pickup-slot.controller.ts for details and validation.
  * =============================================================================
  */
 
@@ -184,6 +192,7 @@ const pickupSlotRouter = Router();
  * /api/pickup-slots:
  *   post:
  *     summary: Create a pickup slot
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     requestBody:
  *       required: true
@@ -201,13 +210,20 @@ const pickupSlotRouter = Router();
  *       409:
  *         description: Duplicate slot
  */
-pickupSlotRouter.post('/', PickupSlotController.create);
+pickupSlotRouter.post(
+  '/',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vCreatePickupSlot,
+  PickupSlotController.create
+);
 
 /**
  * @swagger
  * /api/pickup-slots:
  *   get:
  *     summary: List pickup slots (pagination + sort)
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     parameters:
  *       - in: query
@@ -233,13 +249,20 @@ pickupSlotRouter.post('/', PickupSlotController.create);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/DataSlotsWithMeta' }
  */
-pickupSlotRouter.get('/', PickupSlotController.list);
+pickupSlotRouter.get(
+  '/',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vListPickupSlots,
+  PickupSlotController.list
+);
 
 /**
  * @swagger
  * /api/pickup-slots/filter:
  *   get:
  *     summary: Filter pickup slots (advanced)
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     parameters:
  *       - in: query
@@ -298,13 +321,20 @@ pickupSlotRouter.get('/', PickupSlotController.list);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/DataSlotsWithMeta' }
  */
-pickupSlotRouter.get('/filter', PickupSlotController.filter);
+pickupSlotRouter.get(
+  '/filter',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vFilterPickupSlots,
+  PickupSlotController.filter
+);
 
 /**
  * @swagger
  * /api/pickup-slots/by-day:
  *   delete:
  *     summary: Delete all slots for a (location, date)
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     parameters:
  *       - in: query
@@ -324,13 +354,20 @@ pickupSlotRouter.get('/filter', PickupSlotController.filter);
  *       400:
  *         description: Invalid query
  */
-pickupSlotRouter.delete('/by-day', PickupSlotController.deleteByDay);
+pickupSlotRouter.delete(
+  '/by-day',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vDeleteByDay,
+  PickupSlotController.deleteByDay
+);
 
 /**
  * @swagger
  * /api/pickup-slots/generate/day:
  *   post:
  *     summary: Generate slots for one day from windows + interval
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     requestBody:
  *       required: true
@@ -346,13 +383,20 @@ pickupSlotRouter.delete('/by-day', PickupSlotController.deleteByDay);
  *       400:
  *         description: Invalid body
  */
-pickupSlotRouter.post('/generate/day', PickupSlotController.generateForDay);
+pickupSlotRouter.post(
+  '/generate/day',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vGeneratePickupSlotsForDay,
+  PickupSlotController.generateForDay
+);
 
 /**
  * @swagger
  * /api/pickup-slots/generate/month:
  *   post:
  *     summary: Generate slots for an entire month from a weekly schedule
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     requestBody:
  *       required: true
@@ -368,13 +412,20 @@ pickupSlotRouter.post('/generate/day', PickupSlotController.generateForDay);
  *       400:
  *         description: Invalid body
  */
-pickupSlotRouter.post('/generate/month', PickupSlotController.generateForMonth);
+pickupSlotRouter.post(
+  '/generate/month',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vGeneratePickupSlotsForMonth,
+  PickupSlotController.generateForMonth
+);
 
 /**
  * @swagger
  * /api/pickup-slots/{slotId}:
  *   get:
  *     summary: Get a pickup slot by ID
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     parameters:
  *       - in: path
@@ -390,13 +441,20 @@ pickupSlotRouter.post('/generate/month', PickupSlotController.generateForMonth);
  *       404:
  *         description: Not found
  */
-pickupSlotRouter.get('/:slotId', PickupSlotController.getById);
+pickupSlotRouter.get(
+  '/:slotId',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vParamSlotId,
+  PickupSlotController.getById
+);
 
 /**
  * @swagger
  * /api/pickup-slots/{slotId}:
  *   delete:
  *     summary: Delete a pickup slot by ID
+ *     security: [ { bearerAuth: [] } ]
  *     tags: [PickupSlots]
  *     parameters:
  *       - in: path
@@ -412,6 +470,12 @@ pickupSlotRouter.get('/:slotId', PickupSlotController.getById);
  *       404:
  *         description: Not found
  */
-pickupSlotRouter.delete('/:slotId', PickupSlotController.remove);
+pickupSlotRouter.delete(
+  '/:slotId',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vParamSlotId,
+  PickupSlotController.remove
+);
 
 export default pickupSlotRouter;

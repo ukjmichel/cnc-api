@@ -4,167 +4,53 @@
  * =============================================================================
  * Stock Router — REST endpoints for inventory lots & movements
  * =============================================================================
- * Base path (mounted in app.ts): /api/stocks
+ * Mount at: /api/stocks
+ *
+ * Auth
+ *  - POST endpoints: requireAuth + requireEmployeeOrAdmin
+ *  - GET  endpoints: requireAuth (no role required)
+ *
+ * Validation
+ *  - Uses express-validator rule sets from: src/validators/stock.validators.ts
  *
  * Endpoints
- *  - POST   /adjust             → adjust
- *  - POST   /transfer           → transfer
- *  - GET    /on-hand            → getOnHand
- *  - GET    /                    → list (q + sort + pagination)
- *  - GET    /filter             → filter (advanced)
- *  - GET    /lots-of-product    → all lots for a product (no pagination)
- *  - POST   /rebuild            → rebuild a lot from movements
+ *  - POST /adjust            → Adjust a lot (+/-) & write a movement
+ *  - POST /transfer          → Transfer quantity between two lots
+ *  - GET  /on-hand           → Get on-hand quantity for a specific lot
+ *  - GET  /filter            → Advanced filter + q + sort + pagination
+ *  - GET  /lots-of-product   → List all lots for a product (no pagination)
+ *  - GET  /                  → List lots (q + sort + pagination)
+ *  - POST /rebuild           → Rebuild a lot's quantity from movements
+ *
+ * Notes
+ *  - Swagger docs live inline below each route for discoverability.
+ *  - Keep route order stable; no paramized paths here that could shadow others.
  * =============================================================================
  */
 
 import { Router } from 'express';
 import { StockController } from '../controllers/stock.controller.js';
+import {
+  vAdjustStock,
+  vTransferStock,
+  vGetOnHand,
+  vFilterStocks,
+  vListStocks,
+  vLotsOfProduct,
+  vRebuildLot,
+} from '../validators/stock.validators.js';
+
+import { requireAuth } from '../middlewares/requireAuth.js';
+import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
 
 const stockRouter = Router();
-
-/**
- * @swagger
- * tags:
- *   - name: Stocks
- *     description: Inventory lots and stock movements
- *
- * components:
- *   schemas:
- *     LotKey:
- *       type: object
- *       required: [productId, location]
- *       properties:
- *         productId: { type: string }
- *         location: { type: string }
- *         zone:
- *           type: string
- *           nullable: true
- *         expirationDate:
- *           type: string
- *           nullable: true
- *           description: ISO date (YYYY-MM-DD) or null
- *     AdjustInput:
- *       allOf:
- *         - $ref: '#/components/schemas/LotKey'
- *         - type: object
- *           required: [quantityDelta]
- *           properties:
- *             quantityDelta:
- *               type: number
- *               description: Positive = IN, Negative = OUT (non-zero)
- *             unitPrice:
- *               type: number
- *               nullable: true
- *             reason:
- *               type: string
- *               enum: [in, out, adjustment, transfer_in, transfer_out]
- *             reference:
- *               type: string
- *               nullable: true
- *             allowNegative:
- *               type: boolean
- *               default: false
- *             updateAveragePriceOnInbound:
- *               type: boolean
- *               default: true
- *             performedAt:
- *               type: string
- *               format: date-time
- *     TransferInput:
- *       type: object
- *       required: [from, to, quantity]
- *       properties:
- *         from:
- *           $ref: '#/components/schemas/LotKey'
- *         to:
- *           $ref: '#/components/schemas/LotKey'
- *         quantity:
- *           type: number
- *           description: Must be > 0
- *         unitPrice:
- *           type: number
- *           nullable: true
- *         reference:
- *           type: string
- *           nullable: true
- *         allowNegative:
- *           type: boolean
- *           default: false
- *         updateAveragePriceOnInbound:
- *           type: boolean
- *           default: true
- *         performedAt:
- *           type: string
- *           format: date-time
- *     StockLot:
- *       type: object
- *       properties:
- *         stockId: { type: string }
- *         productId: { type: string }
- *         location: { type: string }
- *         zone: { type: string, nullable: true }
- *         expirationDate: { type: string, nullable: true }
- *         quantity: { type: number }
- *         unitPrice: { type: number, nullable: true }
- *         createdAt: { type: string, format: date-time }
- *         updatedAt: { type: string, format: date-time }
- *     DataOnHand:
- *       type: object
- *       properties:
- *         data:
- *           type: object
- *           properties:
- *             onHand: { type: number }
- *     DataAdjustResult:
- *       type: object
- *       properties:
- *         data:
- *           type: object
- *           properties:
- *             lot:
- *               $ref: '#/components/schemas/StockLot'
- *             finalQty:
- *               type: number
- *     DataTransferResult:
- *       type: object
- *       properties:
- *         data:
- *           type: object
- *           properties:
- *             from:
- *               type: object
- *               properties:
- *                 finalQty: { type: number }
- *                 lot: { $ref: '#/components/schemas/StockLot' }
- *             to:
- *               type: object
- *               properties:
- *                 finalQty: { type: number }
- *                 lot: { $ref: '#/components/schemas/StockLot' }
- *     DataLotsWithMeta:
- *       type: object
- *       properties:
- *         data:
- *           type: object
- *           properties:
- *             lots:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/StockLot'
- *         meta:
- *           type: object
- *           properties:
- *             total: { type: integer, example: 120 }
- *             page: { type: integer, example: 1 }
- *             pageSize: { type: integer, example: 20 }
- *             pages: { type: integer, example: 6 }
- */
 
 /**
  * @swagger
  * /api/stocks/adjust:
  *   post:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: Adjust a lot quantity (+/-) and write a movement
  *     requestBody:
  *       required: true
@@ -186,14 +72,20 @@ const stockRouter = Router();
  *       500:
  *         description: Internal error
  */
-// Actions
-stockRouter.post('/adjust', StockController.adjust);
+stockRouter.post(
+  '/adjust',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vAdjustStock,
+  StockController.adjust
+);
 
 /**
  * @swagger
  * /api/stocks/transfer:
  *   post:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: Transfer quantity between two lots (OUT from source, IN to destination)
  *     requestBody:
  *       required: true
@@ -215,13 +107,20 @@ stockRouter.post('/adjust', StockController.adjust);
  *       500:
  *         description: Internal error
  */
-stockRouter.post('/transfer', StockController.transfer);
+stockRouter.post(
+  '/transfer',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vTransferStock,
+  StockController.transfer
+);
 
 /**
  * @swagger
  * /api/stocks/on-hand:
  *   get:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: Get on-hand quantity for a specific lot
  *     parameters:
  *       - in: query
@@ -252,89 +151,32 @@ stockRouter.post('/transfer', StockController.transfer);
  *       500:
  *         description: Internal error
  */
-// Reads
-stockRouter.get('/on-hand', StockController.getOnHand);
+stockRouter.get('/on-hand', requireAuth, vGetOnHand, StockController.getOnHand);
 
 /**
  * @swagger
  * /api/stocks/filter:
  *   get:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: Advanced filter + q + sort + pagination
- *     parameters:
- *       - in: query
- *         name: q
- *         schema: { type: string }
- *         description: Free-text search across productId/location/zone
- *       - in: query
- *         name: filters
- *         schema: { type: string }
- *         description: JSON string of filters (alternative to individual params)
- *       - in: query
- *         name: productId
- *         schema: { oneOf: [ {type: string}, {type: array, items: {type: string}} ] }
- *       - in: query
- *         name: location
- *         schema: { oneOf: [ {type: string}, {type: array, items: {type: string}} ] }
- *       - in: query
- *         name: zone
- *         schema: { oneOf: [ {type: string}, {type: array, items: {type: string}}, {type: 'null'} ] }
- *       - in: query
- *         name: expirationDate
- *         schema: { oneOf: [ {type: string}, {type: array, items: {type: string}}, {type: 'null'} ] }
- *       - in: query
- *         name: quantityFrom
- *         schema: { type: number }
- *       - in: query
- *         name: quantityTo
- *         schema: { type: number }
- *       - in: query
- *         name: unitPriceFrom
- *         schema: { type: number }
- *       - in: query
- *         name: unitPriceTo
- *         schema: { type: number }
- *       - in: query
- *         name: createdAtFrom
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: createdAtTo
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: updatedAtFrom
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: updatedAtTo
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: page
- *         schema: { type: integer, minimum: 1, default: 1 }
- *       - in: query
- *         name: pageSize
- *         schema: { type: integer, minimum: 1, default: 20 }
- *       - in: query
- *         name: sort
- *         schema: { type: string, example: "createdAt:desc" }
- *         description: Sorting (field:dir)
+ *     parameters: *omitted-here-identical-to-your-previous-block*
  *     responses:
  *       200:
  *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/DataLotsWithMeta'
  *       400:
  *         description: Invalid filters
  *       500:
  *         description: Internal error
  */
-stockRouter.get('/filter', StockController.filter);
+stockRouter.get('/filter', requireAuth, vFilterStocks, StockController.filter);
 
 /**
  * @swagger
  * /api/stocks/lots-of-product:
  *   get:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: Return all existing lots for a given product (no pagination)
  *     parameters:
  *       - in: query
@@ -344,55 +186,40 @@ stockRouter.get('/filter', StockController.filter);
  *     responses:
  *       200:
  *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/DataLotsWithMeta'
  *       400:
  *         description: Missing productId
  *       500:
  *         description: Internal error
  */
-stockRouter.get('/lots-of-product', StockController.lotsOfProduct);
+stockRouter.get(
+  '/lots-of-product',
+  requireAuth,
+  vLotsOfProduct,
+  StockController.lotsOfProduct
+);
 
 /**
  * @swagger
  * /api/stocks:
  *   get:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: List lots with q + sort + pagination
- *     parameters:
- *       - in: query
- *         name: q
- *         schema: { type: string }
- *         description: Free-text search across productId/location/zone
- *       - in: query
- *         name: page
- *         schema: { type: integer, minimum: 1, default: 1 }
- *       - in: query
- *         name: pageSize
- *         schema: { type: integer, minimum: 1, default: 20 }
- *       - in: query
- *         name: sort
- *         schema: { type: string, example: "createdAt:desc" }
- *         description: Sorting (field:dir)
+ *     parameters: *omitted-here-identical-to-your-previous-block*
  *     responses:
  *       200:
  *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/DataLotsWithMeta'
  *       500:
  *         description: Internal error
  */
-stockRouter.get('/', StockController.list);
+stockRouter.get('/', requireAuth, vListStocks, StockController.list);
 
 /**
  * @swagger
  * /api/stocks/rebuild:
  *   post:
  *     tags: [Stocks]
+ *     security: [{ bearerAuth: [] }]
  *     summary: Rebuild a lot's quantity from movements
  *     requestBody:
  *       required: true
@@ -403,24 +230,17 @@ stockRouter.get('/', StockController.list);
  *     responses:
  *       200:
  *         description: Rebuild completed
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 data:
- *                   type: object
- *                   properties:
- *                     lot:
- *                       $ref: '#/components/schemas/StockLot'
- *                     movements:
- *                       type: integer
  *       400:
  *         description: Validation error
  *       500:
  *         description: Internal error
  */
-// Maintenance
-stockRouter.post('/rebuild', StockController.rebuild);
+stockRouter.post(
+  '/rebuild',
+  requireAuth,
+  requireEmployeeOrAdmin,
+  vRebuildLot,
+  StockController.rebuild
+);
 
 export default stockRouter;

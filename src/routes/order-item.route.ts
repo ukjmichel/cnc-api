@@ -18,7 +18,6 @@ import { OrderItemsController } from '../controllers/order-item.controller.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
 import { requireOrderOwnerOrStaff } from '../middlewares/requireOrderOwnerOrStaff.js'; // <- fixed stray space
 
-import { validate } from '../middlewares/validate.js';
 import {
   vCreateOrderItem,
   vCreateManyOrderItems,
@@ -87,7 +86,6 @@ orderItemsNestedRouter.post(
   requireAuth,
   requireOrderOwnerOrStaff,
   vCreateOrderItem,
-  validate,
   OrderItemsController.create
 );
 
@@ -151,7 +149,6 @@ orderItemsNestedRouter.post(
   requireAuth,
   requireOrderOwnerOrStaff,
   vCreateManyOrderItems,
-  validate,
   OrderItemsController.createMany
 );
 
@@ -213,7 +210,6 @@ orderItemsNestedRouter.get(
   requireAuth,
   requireOrderOwnerOrStaff,
   vListForOrder,
-  validate,
   OrderItemsController.listForOrder
 );
 
@@ -262,7 +258,6 @@ orderItemsNestedRouter.get(
   requireAuth,
   requireOrderOwnerOrStaff,
   vGetOne,
-  validate,
   OrderItemsController.getOne
 );
 
@@ -324,7 +319,6 @@ orderItemsNestedRouter.patch(
   requireAuth,
   requireOrderOwnerOrStaff,
   vUpdateOrderItem,
-  validate,
   OrderItemsController.update
 );
 
@@ -374,7 +368,6 @@ orderItemsNestedRouter.delete(
   requireAuth,
   requireOrderOwnerOrStaff,
   vRemoveOrderItem,
-  validate,
   OrderItemsController.remove
 );
 
@@ -452,14 +445,13 @@ orderItemsNestedRouter.delete(
  * Global filter/search
  * NOTE: This path looks odd when mounted as a nested router.
  * Prefer wiring this on your top-level api router:
- *   app.get('/api/order-items', requireAuth, vGlobalFilter, validate, OrderItemsController.filter)
+ *   app.get('/api/order-items', requireAuth, vGlobalFilter, OrderItemsController.filter)
  * If you keep it here, make sure the mount path results in /api/order-items.
  */
 orderItemsNestedRouter.get(
   '/../../order-items',
   requireAuth,
   vGlobalFilter,
-  validate,
   OrderItemsController.filter
 );
 

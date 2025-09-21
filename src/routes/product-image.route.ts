@@ -30,6 +30,19 @@ import { ProductImageController } from '../controllers/product-image.controller.
 import { singleProductImage } from '../config/multer.config.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
 import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
+import { validate } from '../middlewares/validate.js';
+import {
+  vCreateProductImage,
+  vUpsertProductImage,
+  vUploadProductImage,
+  vListProductImages,
+  vFilterProductImages,
+  vGetByProductAndVariant,
+  vParamImageId,
+  vUpdateProductImage,
+  vDeleteByProductAndVariant,
+  vParamProductId,
+} from '../validators/product-image.validators.js';
 
 const productImageRouter = Router();
 
@@ -52,6 +65,8 @@ productImageRouter.post(
   '/',
   requireAuth,
   requireEmployeeOrAdmin,
+  vCreateProductImage,
+  validate,
   ProductImageController.create
 );
 
@@ -67,6 +82,8 @@ productImageRouter.post(
   '/upsert',
   requireAuth,
   requireEmployeeOrAdmin,
+  vUpsertProductImage,
+  validate,
   ProductImageController.upsertVariant
 );
 
@@ -82,7 +99,10 @@ productImageRouter.post(
   '/upload',
   requireAuth,
   requireEmployeeOrAdmin,
+  // Multer must run before validators that check req.file
   singleProductImage('image'),
+  vUploadProductImage,
+  validate,
   ProductImageController.createWithUpload
 );
 
@@ -98,6 +118,8 @@ productImageRouter.get(
   '/',
   requireAuth,
   requireEmployeeOrAdmin,
+  vListProductImages,
+  validate,
   ProductImageController.list
 );
 
@@ -113,6 +135,8 @@ productImageRouter.get(
   '/filter',
   requireAuth,
   requireEmployeeOrAdmin,
+  vFilterProductImages,
+  validate,
   ProductImageController.filter
 );
 
@@ -126,6 +150,8 @@ productImageRouter.get(
  */
 productImageRouter.get(
   '/by-product',
+  vGetByProductAndVariant,
+  validate,
   ProductImageController.getByProductAndVariant
 );
 
@@ -141,6 +167,8 @@ productImageRouter.get(
   '/:id',
   requireAuth,
   requireEmployeeOrAdmin,
+  vParamImageId,
+  validate,
   ProductImageController.getById
 );
 
@@ -156,6 +184,8 @@ productImageRouter.patch(
   '/:id',
   requireAuth,
   requireEmployeeOrAdmin,
+  vUpdateProductImage,
+  validate,
   ProductImageController.update
 );
 
@@ -171,6 +201,8 @@ productImageRouter.delete(
   '/by-product',
   requireAuth,
   requireEmployeeOrAdmin,
+  vDeleteByProductAndVariant,
+  validate,
   ProductImageController.deleteByProductAndVariant
 );
 
@@ -186,6 +218,8 @@ productImageRouter.delete(
   '/:id',
   requireAuth,
   requireEmployeeOrAdmin,
+  vParamImageId,
+  validate,
   ProductImageController.remove
 );
 
@@ -201,6 +235,8 @@ productImageRouter.delete(
   '/by-product/:productId',
   requireAuth,
   requireEmployeeOrAdmin,
+  vParamProductId,
+  validate,
   ProductImageController.deleteAllByProduct
 );
 

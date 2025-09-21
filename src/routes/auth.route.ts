@@ -18,6 +18,11 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/auth.controller.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
+import {
+  vRegisterBody,
+  vLoginBody,
+  vRefreshBody,
+} from '../validators/auth.validators.js';
 
 export const authRouter = Router();
 
@@ -145,7 +150,7 @@ export const authRouter = Router();
  *       500:
  *         description: Internal error
  */
-authRouter.post('/register', AuthController.register);
+authRouter.post('/register', vRegisterBody, AuthController.register);
 
 /**
  * @swagger
@@ -173,7 +178,7 @@ authRouter.post('/register', AuthController.register);
  *       500:
  *         description: Internal error
  */
-authRouter.post('/login', AuthController.login);
+authRouter.post('/login', vLoginBody, AuthController.login);
 
 /**
  * @swagger
@@ -201,7 +206,7 @@ authRouter.post('/login', AuthController.login);
  *       500:
  *         description: Internal error
  */
-authRouter.post('/refresh', AuthController.refresh);
+authRouter.post('/refresh', vRefreshBody, AuthController.refresh);
 
 /**
  * @swagger

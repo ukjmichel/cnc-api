@@ -2,8 +2,22 @@
 import { Router } from 'express';
 import { OrderController } from '../controllers/order.controller.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
-import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
+import { requireAdmin, requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
 import { requireOrderOwnerOrStaff } from '../middlewares/requireOrderOwnerOrStaff.js';
+import { validate } from '../middlewares/validate.js';
+import {
+  vCreateOrder,
+  vListOrders,
+  vFilterOrders,
+  vListSelfOrders,
+  vGetSelfOrderById,
+  vGetOrderById,
+  vUpdateOrderTotals,
+  vUpdateOrderContact,
+  vChangeOrderStatus,
+  vSetOrderPickupSlot,
+  vDeleteOrder,
+} from '../validators/order.validator.js';
 
 const orderRouter = Router();
 
@@ -180,6 +194,8 @@ orderRouter.post(
   '/',
   requireAuth,
   requireEmployeeOrAdmin,
+  vCreateOrder,
+  requireAdmin,
   OrderController.create
 );
 
@@ -239,7 +255,7 @@ orderRouter.post(
  *       500:
  *         description: Internal error
  */
-orderRouter.get('/', requireAuth, OrderController.list);
+orderRouter.get('/', requireAuth, vListOrders,  OrderController.list);
 
 /**
  * @swagger
@@ -296,6 +312,8 @@ orderRouter.get(
   '/filter',
   requireAuth,
   requireEmployeeOrAdmin,
+  vFilterOrders,
+  
   OrderController.filter
 );
 
@@ -342,7 +360,13 @@ orderRouter.get(
  *       401:
  *         description: Unauthorized
  */
-orderRouter.get('/self', requireAuth, OrderController.listSelf);
+orderRouter.get(
+  '/self',
+  requireAuth,
+  vListSelfOrders,
+  
+  OrderController.listSelf
+);
 
 /**
  * @swagger
@@ -373,6 +397,8 @@ orderRouter.get(
   '/self/:orderId',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vGetSelfOrderById,
+  
   OrderController.getSelfById
 );
 
@@ -408,6 +434,8 @@ orderRouter.get(
   '/:orderId',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vGetOrderById,
+  
   OrderController.getById
 );
 
@@ -444,6 +472,8 @@ orderRouter.patch(
   '/:orderId/totals',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vUpdateOrderTotals,
+  
   OrderController.updateTotals
 );
 
@@ -480,6 +510,8 @@ orderRouter.patch(
   '/:orderId/contact',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vUpdateOrderContact,
+  
   OrderController.updateContact
 );
 
@@ -521,6 +553,8 @@ orderRouter.patch(
   '/:orderId/status',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vChangeOrderStatus,
+  
   OrderController.changeStatus
 );
 
@@ -561,6 +595,8 @@ orderRouter.patch(
   '/:orderId/pickup-slot',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vSetOrderPickupSlot,
+  
   OrderController.setPickupSlot
 );
 
@@ -596,6 +632,8 @@ orderRouter.delete(
   '/:orderId',
   requireAuth,
   requireOrderOwnerOrStaff,
+  vDeleteOrder,
+  
   OrderController.remove
 );
 
