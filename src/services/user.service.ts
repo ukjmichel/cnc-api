@@ -3,21 +3,35 @@
  * UserService — Business Logic Layer for User Accounts
  * =============================================================================
  * Purpose
- *  - Encapsulates all operations around the `UserModel` (sequelize-typescript).
- *  - Returns **plain entities/collections**; controllers handle any `{ data: ... }` wrapping.
+ *  - Encapsulates all operations for `UserModel` (sequelize-typescript).
+ *  - Returns **plain entities/collections**; controllers do the HTTP wrapping.
+ *  - Keeps DB/transaction concerns here (via `withTransaction`) so controllers
+ *    remain thin and declarative.
  *
- * Additions
- *  - Include authorization alongside users for list/filter.
- *  - Accept role-based filtering via `authRole` (single string or array).
- *  - list/filter return **flattened user objects** with `authorization: { role } | null`
- *    (only the role is exposed from AuthorizationModel).
+ * Highlights
+ *  - CRUD (create/read/update/delete)
+ *  - Password change with current-password verification
+ *  - Set verified flag
+ *  - Get by email/username
+ *  - List & Filter with pagination, ordering, free-text + structured filters
+ *  - Optional **role-based filtering** through `AuthorizationModel`:
+ *      - Accepts `authRole?: 'user' | 'employee' | 'administrator' | Role[]`
+ *      - Responses **flatten users** and include `authorization: { role } | null`
+ *
+ * Error semantics
+ *  - `NotFoundError`  → resource missing
+ *  - `DuplicateError` → unique key violations (username/email)
+ *  - `AuthError`      → credential failures (e.g., wrong current password)
+ *
+ * Conventions
+ *  - Decimal/Date/Bool handling is normalized in the model layer.
+ *  - Any `{ data: ... }` wrapping for HTTP responses happens in controllers.
+ *  - Keep **authorization checks** (who can call which method) out of here;
+ *    enforce in middleware or controllers.
  * =============================================================================
  */
 
-import {
-  Op,
-  UniqueConstraintError,
-} from 'sequelize';
+import { Op, UniqueConstraintError } from 'sequelize';
 import type { FindOptions, WhereOptions } from 'sequelize';
 
 import type {
@@ -37,8 +51,7 @@ import { withTransaction } from '../utils/tx.js';
 
 type Role = 'user' | 'employee' | 'administrator';
 
-
-/** Normalize roles input to an array. */
+/** Normalize roles input to an array (internal helper). */
 function normalizeRoles(input?: Role | Role[]): Role[] | undefined {
   if (!input) return undefined;
   return Array.isArray(input) ? input : [input];
@@ -47,6 +60,22 @@ function normalizeRoles(input?: Role | Role[]): Role[] | undefined {
 export class UserService {
   // ===== CRUD =====
 
+  /**
+   * Create a user.
+   *
+   * @param data - New user payload
+   * @returns Plain user JSON
+   * @throws {DuplicateError} If username or email already exists
+   *
+   * @example
+   * const user = await UserService.create({
+   *   username: 'jsmith',
+   *   firstName: 'John',
+   *   lastName: 'Smith',
+   *   email: 'john@site.tld',
+   *   password: 'hashedOrRawDependingOnModelHook',
+   * });
+   */
   static async create(data: CreateUserDTO) {
     return withTransaction(async (t) => {
       try {
@@ -70,6 +99,13 @@ export class UserService {
     });
   }
 
+  /**
+   * Fetch a user by primary key.
+   *
+   * @param userId - UUID of the user
+   * @returns Plain user JSON
+   * @throws {NotFoundError} If the user does not exist
+   */
   static async getById(userId: string) {
     const user = await UserModel.findByPk(userId);
     if (!user) throw new NotFoundError('User not found');
@@ -77,16 +113,15 @@ export class UserService {
   }
 
   /**
-   * List users with optional role filter, and include each user's authorization (role only).
+   * List users with pagination and optional role filtering.
    *
-   * Extended query:
-   *  - authRole?: Role | Role[]
+   * - Supports free-text `q` against username/email/firstName/lastName/userId.
+   * - Supports sorting via `orderBy` + `orderDir`.
+   * - Adds `authorization: { role } | null` into each result row.
+   * - `authRole` can be a single role or array of roles.
    *
-   * Returns:
-   *  {
-   *    users: Array<User & { authorization: { role: Role } | null }>,
-   *    total, page, pageSize, pages
-   *  }
+   * @param query - ListUsersQuery (page, pageSize, q, orderBy, orderDir, authRole)
+   * @returns Object with `{ users, total, page, pageSize, pages }`
    */
   static async list(query: ListUsersQuery = {}) {
     const {
@@ -150,16 +185,13 @@ export class UserService {
   }
 
   /**
-   * Filter users (advanced) with optional role filter, and include authorization (role only).
+   * Advanced filter for users with pagination, structured filters and optional role filtering.
    *
-   * Extended query:
-   *  - authRole?: Role | Role[]
+   * - `filters` supports string pattern matches, created/updated ranges and `verified`.
+   * - Adds `authorization: { role } | null` to each row.
    *
-   * Returns:
-   *  {
-   *    users: Array<User & { authorization: { role: Role } | null }>,
-   *    total, page, pageSize, pages
-   *  }
+   * @param query - ListUsersQuery (page, pageSize, q, filters, verified, orderBy, orderDir, authRole)
+   * @returns Object with `{ users, total, page, pageSize, pages }`
    */
   static async filter(query: ListUsersQuery = {}) {
     const {
@@ -232,6 +264,15 @@ export class UserService {
     };
   }
 
+  /**
+   * Update basic profile fields (username, firstName, lastName, email).
+   *
+   * @param userId - Target user
+   * @param updates - Partial profile payload
+   * @returns Plain user JSON
+   * @throws {NotFoundError} If user does not exist
+   * @throws {DuplicateError} If username/email violates unique constraint
+   */
   static async update(userId: string, updates: UpdateUserDTO) {
     return withTransaction(async (t) => {
       const user = await UserModel.findByPk(userId, {
@@ -260,6 +301,13 @@ export class UserService {
     });
   }
 
+  /**
+   * Delete a user.
+   *
+   * @param userId - Target user
+   * @returns `{ success: true }` on success
+   * @throws {NotFoundError} If the user does not exist
+   */
   static async delete(userId: string) {
     return withTransaction(async (t) => {
       const deletedCount = await UserModel.destroy({
@@ -271,6 +319,15 @@ export class UserService {
     });
   }
 
+  /**
+   * Change a user's password (verifies current password).
+   *
+   * @param userId - Target user
+   * @param payload - `{ currentPassword, newPassword }`
+   * @returns `{ success: true }` on success
+   * @throws {NotFoundError} If user not found
+   * @throws {AuthError} If current password does not match
+   */
   static async changePassword(userId: string, payload: ChangePasswordDTO) {
     return withTransaction(async (t) => {
       const user = await UserModel.findByPk(userId, {
@@ -288,6 +345,14 @@ export class UserService {
     });
   }
 
+  /**
+   * Set a user's verified flag.
+   *
+   * @param userId - Target user
+   * @param verified - `true` or `false`
+   * @returns Plain user JSON
+   * @throws {NotFoundError} If user not found
+   */
   static async setVerified(userId: string, verified: boolean) {
     return withTransaction(async (t) => {
       const user = await UserModel.findByPk(userId, {
@@ -301,12 +366,26 @@ export class UserService {
     });
   }
 
+  /**
+   * Get a user by email.
+   *
+   * @param email - Email address
+   * @returns Plain user JSON
+   * @throws {NotFoundError} If user not found
+   */
   static async getByEmail(email: string) {
     const user = await UserModel.findOne({ where: { email } });
     if (!user) throw new NotFoundError('User not found');
     return user.toJSON();
   }
 
+  /**
+   * Get a user by username.
+   *
+   * @param username - Username
+   * @returns Plain user JSON
+   * @throws {NotFoundError} If user not found
+   */
   static async getByUsername(username: string) {
     const user = await UserModel.findOne({ where: { username } });
     if (!user) throw new NotFoundError('User not found');
@@ -315,6 +394,13 @@ export class UserService {
 
   // ===== PRIVATE SEARCH HELPERS =====
 
+  /**
+   * Convert a string value and match mode into a SQL LIKE pattern.
+   * @param value - The raw string value
+   * @param mode - String match mode
+   * @returns Concrete pattern string
+   * @private
+   */
   private static patternFor(value: string, mode: StringMatch) {
     switch (mode) {
       case 'exact':
@@ -329,6 +415,11 @@ export class UserService {
     }
   }
 
+  /**
+   * Build a `WhereOptions` for a single string field under a given match mode.
+   * Supports arrays (OR semantics) when `mode !== 'exact'`.
+   * @private
+   */
   private static stringFieldCondition(
     field: string,
     value: string | string[],
@@ -346,6 +437,11 @@ export class UserService {
     return { [field]: { [Op.like]: this.patternFor(value, mode) } };
   }
 
+  /**
+   * Build the composite WHERE clause for `list`/`filter` operations from
+   * free-text `q` and structured `filters`.
+   * @private
+   */
   private static buildUserWhere(
     q?: string,
     filters?: UserFilters
@@ -411,4 +507,5 @@ export class UserService {
   }
 }
 
+/** Named export alias (current project style). */
 export const userService = UserService;
