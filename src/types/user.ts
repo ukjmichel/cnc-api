@@ -72,6 +72,26 @@ export interface ListUsersQuery {
     | 'firstName'
     | 'lastName'
     | 'email'
-    | 'role'; // <-- add role here
+    | 'role'; // optional virtual sort via joined/derived role
   orderDir?: 'ASC' | 'DESC';
+}
+
+/**
+ * =============================================================================
+ * ApiUser — Safe representation of a user for API responses
+ * =============================================================================
+ * - Excludes password and any raw top-level role
+ * - Includes normalized authorization in the shape { role } | null
+ * =============================================================================
+ */
+export interface ApiUser {
+  userId: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  verified: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  authorization: { role: string } | null;
 }

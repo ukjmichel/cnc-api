@@ -1,4 +1,5 @@
-import { Optional } from "sequelize";
+// src/types/authorization.ts
+ import { Optional } from "sequelize";
 
 export type Role = 'user' | 'employee' | 'administrator';
 

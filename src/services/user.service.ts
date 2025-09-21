@@ -2,94 +2,209 @@
  * =============================================================================
  * UserService — Business Logic Layer for User Accounts
  * =============================================================================
- * Purpose
- *  - Encapsulates all operations for `UserModel` (sequelize-typescript).
- *  - Returns **plain entities/collections**; controllers do the HTTP wrapping.
- *  - Keeps DB/transaction concerns here (via `withTransaction`) so controllers
- *    remain thin and declarative.
+ * Responsibilities
+ *  - Encapsulate all DB operations around UserModel.
+ *  - Validate existence before mutations (throw custom errors).
+ *  - Handle uniqueness conflicts (DuplicateError).
+ *  - Return plain, **serialized** ApiUser objects (no password) and
+ *    collections with pagination.
  *
- * Highlights
- *  - CRUD (create/read/update/delete)
- *  - Password change with current-password verification
- *  - Set verified flag
- *  - Get by email/username
- *  - List & Filter with pagination, ordering, free-text + structured filters
- *  - Optional **role-based filtering** through `AuthorizationModel`:
- *      - Accepts `authRole?: 'user' | 'employee' | 'administrator' | Role[]`
- *      - Responses **flatten users** and include `authorization: { role } | null`
- *
- * Error semantics
- *  - `NotFoundError`  → resource missing
- *  - `DuplicateError` → unique key violations (username/email)
- *  - `AuthError`      → credential failures (e.g., wrong current password)
+ * Extras
+ *  - Role-aware list/filter: exposes only `authorization: { role } | null`.
+ *  - Accept optional `authRole` (single or array) to include only users
+ *    who have one of those roles in AuthorizationModel.
  *
  * Conventions
- *  - Decimal/Date/Bool handling is normalized in the model layer.
- *  - Any `{ data: ... }` wrapping for HTTP responses happens in controllers.
- *  - Keep **authorization checks** (who can call which method) out of here;
- *    enforce in middleware or controllers.
+ *  - Use `withTransaction` when a method performs a multi-step change.
+ *  - Leave HTTP concerns (status codes, response envelopes) to controllers.
  * =============================================================================
  */
 
 import { Op, UniqueConstraintError } from 'sequelize';
-import type { FindOptions, WhereOptions } from 'sequelize';
+import type { FindOptions, WhereOptions, Transaction } from 'sequelize';
 
-import type {
-  CreateUserDTO,
-  UpdateUserDTO,
-  ChangePasswordDTO,
-  ListUsersQuery,
-  UserFilters,
-  StringMatch,
+import {
+  type CreateUserDTO,
+  type UpdateUserDTO,
+  type ChangePasswordDTO,
+  type ListUsersQuery,
+  type UserFilters,
+  type StringMatch,
+  type ApiUser,
 } from '../types/user.js';
 
+import type { Role } from '../types/authorization.js';
 import { NotFoundError, DuplicateError, AuthError } from '../errors/index.js';
-import { sequelize } from '../db/sequelize.js';
 import { UserModel } from '../models/user.model.js';
 import { AuthorizationModel } from '../models/authorization.model.js';
 import { withTransaction } from '../utils/tx.js';
+import {
+  serializeUser,
+  serializeUsers,
+} from '../serializers/user.serializer.js';
 
-type Role = 'user' | 'employee' | 'administrator';
+/* -------------------------------------------------------------------------- */
+/* Helpers                                                                     */
+/* -------------------------------------------------------------------------- */
 
-/** Normalize roles input to an array (internal helper). */
+/**
+ * Normalize a role or array of roles into an array (or `undefined` if falsy).
+ * @param {Role | Role[] | undefined} input - A single role, a list of roles, or undefined.
+ * @returns {Role[] | undefined} An array of roles, or `undefined` if no input.
+ */
 function normalizeRoles(input?: Role | Role[]): Role[] | undefined {
   if (!input) return undefined;
   return Array.isArray(input) ? input : [input];
 }
 
+/**
+ * Build a SQL LIKE/ILIKE pattern from a value and match mode.
+ * @param {string} value - The input string to patternize.
+ * @param {StringMatch} mode - Matching mode: 'exact' | 'startsWith' | 'endsWith' | 'like'.
+ * @returns {string} A pattern suitable for use with Sequelize LIKE.
+ */
+function patternFor(value: string, mode: StringMatch) {
+  switch (mode) {
+    case 'exact':
+      return value;
+    case 'startsWith':
+      return `${value}%`;
+    case 'endsWith':
+      return `%${value}`;
+    case 'like':
+    default:
+      return `%${value}%`;
+  }
+}
+
+/**
+ * Create a WHERE condition for a single string field using a value or array of values.
+ * @param {string} field - Column/attribute name.
+ * @param {string | string[]} value - One or many values to match.
+ * @param {StringMatch} mode - Matching mode.
+ * @returns {WhereOptions} A Sequelize where fragment.
+ */
+function stringFieldCondition(
+  field: string,
+  value: string | string[],
+  mode: StringMatch
+): WhereOptions {
+  if (Array.isArray(value)) {
+    if (mode === 'exact') return { [field]: { [Op.in]: value } };
+    return {
+      [Op.or]: value.map((v) => ({
+        [field]: { [Op.like]: patternFor(v, mode) },
+      })),
+    };
+  }
+  if (mode === 'exact') return { [field]: value };
+  return { [field]: { [Op.like]: patternFor(value, mode) } };
+}
+
+/**
+ * Build a composite WHERE clause for users using free-text `q` and structured filters.
+ * @param {string | undefined} q - Free-text query applied across common string fields.
+ * @param {UserFilters | undefined} filters - Structured filters (ids, names, email, dates, verified).
+ * @returns {WhereOptions} Combined Sequelize where clause (possibly empty object).
+ */
+function buildUserWhere(q?: string, filters?: UserFilters): WhereOptions {
+  const andParts: WhereOptions[] = [];
+
+  if (q && q.trim()) {
+    const like = `%${q.trim()}%`;
+    andParts.push({
+      [Op.or]: [
+        { username: { [Op.like]: like } },
+        { email: { [Op.like]: like } },
+        { firstName: { [Op.like]: like } },
+        { lastName: { [Op.like]: like } },
+        { userId: { [Op.like]: like } },
+      ],
+    });
+  }
+
+  if (filters) {
+    const match: StringMatch = filters.match ?? 'like';
+
+    if (filters.userId)
+      andParts.push(stringFieldCondition('userId', filters.userId, match));
+    if (filters.username)
+      andParts.push(stringFieldCondition('username', filters.username, match));
+    if (filters.firstName)
+      andParts.push(
+        stringFieldCondition('firstName', filters.firstName, match)
+      );
+    if (filters.lastName)
+      andParts.push(stringFieldCondition('lastName', filters.lastName, match));
+    if (filters.email)
+      andParts.push(stringFieldCondition('email', filters.email, match));
+
+    if (typeof filters.verified === 'boolean') {
+      andParts.push({ verified: filters.verified });
+    }
+
+    if (filters.createdAtFrom || filters.createdAtTo) {
+      const cond: any = {};
+      if (filters.createdAtFrom) cond[Op.gte] = new Date(filters.createdAtFrom);
+      if (filters.createdAtTo) cond[Op.lte] = new Date(filters.createdAtTo);
+      andParts.push({ createdAt: cond });
+    }
+    if (filters.updatedAtFrom || filters.updatedAtTo) {
+      const cond: any = {};
+      if (filters.updatedAtFrom) cond[Op.gte] = new Date(filters.updatedAtFrom);
+      if (filters.updatedAtTo) cond[Op.lte] = new Date(filters.updatedAtTo);
+      andParts.push({ updatedAt: cond });
+    }
+  }
+
+  return andParts.length ? ({ [Op.and]: andParts } as WhereOptions) : {};
+}
+
+/* -------------------------------------------------------------------------- */
+/* Service                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Business logic layer for user accounts.
+ *
+ * @remarks
+ * - Encapsulates all DB operations around {@link UserModel}.
+ * - Validates existence before mutations, throwing {@link NotFoundError}.
+ * - Handles uniqueness conflicts by mapping {@link UniqueConstraintError} to {@link DuplicateError}.
+ * - Returns serialized {@link ApiUser} objects (without password) and paginated collections.
+ *
+ * @extras
+ * - Role-aware list/filter via {@link AuthorizationModel}, exposing only `authorization: { role } | null`.
+ * - Accepts optional `authRole` (single or array) to include only users with those roles.
+ *
+ * @conventions
+ * - Use {@link withTransaction} when a method performs a multi-step change.
+ * - Leave HTTP concerns (status codes, response envelopes) to controllers.
+ */
 export class UserService {
-  // ===== CRUD =====
+  /* ============================== CREATE =============================== */
 
   /**
    * Create a user.
    *
-   * @param data - New user payload
-   * @returns Plain user JSON
-   * @throws {DuplicateError} If username or email already exists
-   *
-   * @example
-   * const user = await UserService.create({
-   *   username: 'jsmith',
-   *   firstName: 'John',
-   *   lastName: 'Smith',
-   *   email: 'john@site.tld',
-   *   password: 'hashedOrRawDependingOnModelHook',
-   * });
+   * @param {CreateUserDTO} payload - User creation input (username, names, email, password).
+   * @returns {Promise<ApiUser>} The created user (serialized, no password).
+   * @throws {DuplicateError} If username or email already exists.
    */
-  static async create(data: CreateUserDTO) {
-    return withTransaction(async (t) => {
+  static async create(payload: CreateUserDTO): Promise<ApiUser> {
+    return withTransaction(async (t: Transaction) => {
       try {
         const user = await UserModel.create(
           {
-            username: data.username,
-            firstName: data.firstName,
-            lastName: data.lastName,
-            email: data.email,
-            password: data.password,
+            username: payload.username,
+            firstName: payload.firstName,
+            lastName: payload.lastName,
+            email: payload.email,
+            password: payload.password,
           },
           { transaction: t }
         );
-        return user.toJSON();
+        return serializeUser(user.toJSON());
       } catch (err: any) {
         if (err instanceof UniqueConstraintError) {
           throw new DuplicateError('Username or email already exists');
@@ -99,29 +214,56 @@ export class UserService {
     });
   }
 
+  /* =============================== READ ================================ */
+
   /**
-   * Fetch a user by primary key.
-   *
-   * @param userId - UUID of the user
-   * @returns Plain user JSON
-   * @throws {NotFoundError} If the user does not exist
+   * Get a user by primary key.
+   * @param {string} userId - The user id (PK).
+   * @returns {Promise<ApiUser>} The found user (serialized).
+   * @throws {NotFoundError} If the user does not exist.
    */
-  static async getById(userId: string) {
+  static async getById(userId: string): Promise<ApiUser> {
     const user = await UserModel.findByPk(userId);
     if (!user) throw new NotFoundError('User not found');
-    return user.toJSON();
+    return serializeUser(user.toJSON());
   }
 
   /**
-   * List users with pagination and optional role filtering.
+   * Get a user by unique email.
+   * @param {string} email - The unique email address.
+   * @returns {Promise<ApiUser>} The found user (serialized).
+   * @throws {NotFoundError} If no user is found for the given email.
+   */
+  static async getByEmail(email: string): Promise<ApiUser> {
+    const user = await UserModel.findOne({ where: { email } });
+    if (!user) throw new NotFoundError('User not found');
+    return serializeUser(user.toJSON());
+  }
+
+  /**
+   * Get a user by unique username.
+   * @param {string} username - The unique username.
+   * @returns {Promise<ApiUser>} The found user (serialized).
+   * @throws {NotFoundError} If no user is found for the given username.
+   */
+  static async getByUsername(username: string): Promise<ApiUser> {
+    const user = await UserModel.findOne({ where: { username } });
+    if (!user) throw new NotFoundError('User not found');
+    return serializeUser(user.toJSON());
+  }
+
+  /**
+   * List users with optional role filter (via AuthorizationModel).
    *
-   * - Supports free-text `q` against username/email/firstName/lastName/userId.
-   * - Supports sorting via `orderBy` + `orderDir`.
-   * - Adds `authorization: { role } | null` into each result row.
-   * - `authRole` can be a single role or array of roles.
-   *
-   * @param query - ListUsersQuery (page, pageSize, q, orderBy, orderDir, authRole)
-   * @returns Object with `{ users, total, page, pageSize, pages }`
+   * @param {ListUsersQuery} [query] - Pagination, sorting and free-text query.
+   * @param {number} [query.page=1] - 1-based page index.
+   * @param {number} [query.pageSize=20] - Page size limit.
+   * @param {string} [query.q] - Free-text search across several fields.
+   * @param {Role|Role[]} [query.authRole] - Filter to users that have one of the roles.
+   * @param {keyof ApiUser | 'createdAt' | 'updatedAt'} [query.orderBy='createdAt'] - Order column.
+   * @param {'ASC'|'DESC'} [query.orderDir='DESC'] - Order direction.
+   * @returns {Promise<{ users: ApiUser[]; total: number; page: number; pageSize: number; pages: number }>}
+   * Serialized users with pagination meta. `authorization` includes `{ role }` or `null`.
    */
   static async list(query: ListUsersQuery = {}) {
     const {
@@ -133,10 +275,10 @@ export class UserService {
       orderDir = 'DESC',
     } = query as ListUsersQuery & { authRole?: Role | Role[] };
 
-    // Base WHERE from free-text
-    let where = this.buildUserWhere(q, undefined);
+    // Base WHERE from q
+    let where = buildUserWhere(q, undefined);
 
-    // Filter by role via Authorization table
+    // Role filter through authorization table
     const roles = normalizeRoles(authRole);
     if (roles?.length) {
       const authRows = await AuthorizationModel.findAll({
@@ -145,7 +287,7 @@ export class UserService {
       });
       const ids = authRows.map((a) => a.userId);
       if (ids.length === 0) {
-        return { users: [], total: 0, page, pageSize, pages: 1 };
+        return { users: [] as ApiUser[], total: 0, page, pageSize, pages: 1 };
       }
       where = {
         [Op.and]: [where, { userId: { [Op.in]: ids } }],
@@ -161,22 +303,26 @@ export class UserService {
 
     const { rows, count } = await UserModel.findAndCountAll(options);
 
-    // Load auth rows for returned users and expose ONLY { role }
+    // Load auth roles for the returned users
     const userIds = rows.map((u) => u.userId);
     const auths = userIds.length
       ? await AuthorizationModel.findAll({
           where: { userId: { [Op.in]: userIds } },
         })
       : [];
-    const authMap = new Map<string, { role: Role }>(
-      auths.map((a) => [a.userId, { role: a.role }])
+    const authMap = new Map<string, Role>(auths.map((a) => [a.userId, a.role]));
+
+    const users = serializeUsers(
+      rows.map((u) => ({
+        ...u.toJSON(),
+        authorization: authMap.has(u.userId)
+          ? { role: authMap.get(u.userId)! }
+          : null,
+      }))
     );
 
     return {
-      users: rows.map((u) => ({
-        ...u.toJSON(),
-        authorization: authMap.get(u.userId) ?? null,
-      })),
+      users,
       total: count,
       page,
       pageSize,
@@ -185,13 +331,12 @@ export class UserService {
   }
 
   /**
-   * Advanced filter for users with pagination, structured filters and optional role filtering.
+   * Advanced filter with optional role & verified flags.
+   * Supports all `ListUsersQuery` fields and structured `filters`.
    *
-   * - `filters` supports string pattern matches, created/updated ranges and `verified`.
-   * - Adds `authorization: { role } | null` to each row.
-   *
-   * @param query - ListUsersQuery (page, pageSize, q, filters, verified, orderBy, orderDir, authRole)
-   * @returns Object with `{ users, total, page, pageSize, pages }`
+   * @param {ListUsersQuery} [query] - Query object with pagination, sort, `q`, `filters`, `authRole`, `verified`.
+   * @returns {Promise<{ users: ApiUser[]; total: number; page: number; pageSize: number; pages: number }>}
+   * Serialized users with pagination meta. `authorization` includes `{ role }` or `null`.
    */
   static async filter(query: ListUsersQuery = {}) {
     const {
@@ -213,10 +358,10 @@ export class UserService {
         ? { ...(filters ?? {}), verified }
         : filters;
 
-    // Base WHERE from q + structured filters
-    let where = this.buildUserWhere(q, mergedFilters);
+    // WHERE from q + structured filters
+    let where = buildUserWhere(q, mergedFilters);
 
-    // Role filter via Authorization table
+    // Role filter via AuthorizationModel
     const roles = normalizeRoles(authRole);
     if (roles?.length) {
       const authRows = await AuthorizationModel.findAll({
@@ -225,7 +370,7 @@ export class UserService {
       });
       const ids = authRows.map((a) => a.userId);
       if (ids.length === 0) {
-        return { users: [], total: 0, page, pageSize, pages: 1 };
+        return { users: [] as ApiUser[], total: 0, page, pageSize, pages: 1 };
       }
       where = {
         [Op.and]: [where, { userId: { [Op.in]: ids } }],
@@ -241,22 +386,26 @@ export class UserService {
 
     const { rows, count } = await UserModel.findAndCountAll(options);
 
-    // Load auth rows for returned users and expose ONLY { role }
+    // Attach roles
     const userIds = rows.map((u) => u.userId);
     const auths = userIds.length
       ? await AuthorizationModel.findAll({
           where: { userId: { [Op.in]: userIds } },
         })
       : [];
-    const authMap = new Map<string, { role: Role }>(
-      auths.map((a) => [a.userId, { role: a.role }])
+    const authMap = new Map<string, Role>(auths.map((a) => [a.userId, a.role]));
+
+    const users = serializeUsers(
+      rows.map((u) => ({
+        ...u.toJSON(),
+        authorization: authMap.has(u.userId)
+          ? { role: authMap.get(u.userId)! }
+          : null,
+      }))
     );
 
     return {
-      users: rows.map((u) => ({
-        ...u.toJSON(),
-        authorization: authMap.get(u.userId) ?? null,
-      })),
+      users,
       total: count,
       page,
       pageSize,
@@ -264,16 +413,21 @@ export class UserService {
     };
   }
 
+  /* ============================== UPDATE =============================== */
+
   /**
-   * Update basic profile fields (username, firstName, lastName, email).
+   * Update profile fields (no password here).
    *
-   * @param userId - Target user
-   * @param updates - Partial profile payload
-   * @returns Plain user JSON
-   * @throws {NotFoundError} If user does not exist
-   * @throws {DuplicateError} If username/email violates unique constraint
+   * @param {string} userId - The user id to update.
+   * @param {UpdateUserDTO} updates - Patch of allowed fields (username, firstName, lastName, email).
+   * @returns {Promise<ApiUser>} The updated user (serialized).
+   * @throws {NotFoundError} If the user does not exist.
+   * @throws {DuplicateError} If username or email violates uniqueness.
    */
-  static async update(userId: string, updates: UpdateUserDTO) {
+  static async update(
+    userId: string,
+    updates: UpdateUserDTO
+  ): Promise<ApiUser> {
     return withTransaction(async (t) => {
       const user = await UserModel.findByPk(userId, {
         transaction: t,
@@ -291,44 +445,32 @@ export class UserService {
       try {
         user.set(allowed);
         await user.save({ transaction: t });
-        return user.toJSON();
       } catch (err: any) {
         if (err instanceof UniqueConstraintError) {
           throw new DuplicateError('Username or email already exists');
         }
         throw err;
       }
+
+      return serializeUser(user.toJSON());
     });
   }
 
-  /**
-   * Delete a user.
-   *
-   * @param userId - Target user
-   * @returns `{ success: true }` on success
-   * @throws {NotFoundError} If the user does not exist
-   */
-  static async delete(userId: string) {
-    return withTransaction(async (t) => {
-      const deletedCount = await UserModel.destroy({
-        where: { userId },
-        transaction: t,
-      });
-      if (!deletedCount) throw new NotFoundError('User not found');
-      return { success: true };
-    });
-  }
+  /* ============================ PASSWORD =============================== */
 
   /**
-   * Change a user's password (verifies current password).
+   * Change a user's password after validating the current password.
    *
-   * @param userId - Target user
-   * @param payload - `{ currentPassword, newPassword }`
-   * @returns `{ success: true }` on success
-   * @throws {NotFoundError} If user not found
-   * @throws {AuthError} If current password does not match
+   * @param {string} userId - The user id.
+   * @param {ChangePasswordDTO} payload - Current and new password.
+   * @returns {Promise<{ success: true }>} Success flag.
+   * @throws {NotFoundError} If the user does not exist.
+   * @throws {AuthError} If the current password is incorrect.
    */
-  static async changePassword(userId: string, payload: ChangePasswordDTO) {
+  static async changePassword(
+    userId: string,
+    payload: ChangePasswordDTO
+  ): Promise<{ success: true }> {
     return withTransaction(async (t) => {
       const user = await UserModel.findByPk(userId, {
         transaction: t,
@@ -345,167 +487,50 @@ export class UserService {
     });
   }
 
+  /* ============================= VERIFIED ============================== */
+
   /**
-   * Set a user's verified flag.
-   *
-   * @param userId - Target user
-   * @param verified - `true` or `false`
-   * @returns Plain user JSON
-   * @throws {NotFoundError} If user not found
+   * Toggle the `verified` flag of a user.
+   * @param {string} userId - The user id.
+   * @param {boolean} verified - The target state.
+   * @returns {Promise<ApiUser>} The updated user (serialized).
+   * @throws {NotFoundError} If the user does not exist.
    */
-  static async setVerified(userId: string, verified: boolean) {
+  static async setVerified(
+    userId: string,
+    verified: boolean
+  ): Promise<ApiUser> {
     return withTransaction(async (t) => {
       const user = await UserModel.findByPk(userId, {
         transaction: t,
         lock: t.LOCK.UPDATE,
       });
       if (!user) throw new NotFoundError('User not found');
+
       user.verified = verified;
       await user.save({ transaction: t });
-      return user.toJSON();
+      return serializeUser(user.toJSON());
     });
   }
 
-  /**
-   * Get a user by email.
-   *
-   * @param email - Email address
-   * @returns Plain user JSON
-   * @throws {NotFoundError} If user not found
-   */
-  static async getByEmail(email: string) {
-    const user = await UserModel.findOne({ where: { email } });
-    if (!user) throw new NotFoundError('User not found');
-    return user.toJSON();
-  }
+  /* ============================== DELETE =============================== */
 
   /**
-   * Get a user by username.
-   *
-   * @param username - Username
-   * @returns Plain user JSON
-   * @throws {NotFoundError} If user not found
+   * Hard-delete a user.
+   * @param {string} userId - The user id to delete.
+   * @returns {Promise<{ success: true }>} Success flag.
+   * @throws {NotFoundError} If no row was deleted.
    */
-  static async getByUsername(username: string) {
-    const user = await UserModel.findOne({ where: { username } });
-    if (!user) throw new NotFoundError('User not found');
-    return user.toJSON();
-  }
-
-  // ===== PRIVATE SEARCH HELPERS =====
-
-  /**
-   * Convert a string value and match mode into a SQL LIKE pattern.
-   * @param value - The raw string value
-   * @param mode - String match mode
-   * @returns Concrete pattern string
-   * @private
-   */
-  private static patternFor(value: string, mode: StringMatch) {
-    switch (mode) {
-      case 'exact':
-        return value;
-      case 'startsWith':
-        return `${value}%`;
-      case 'endsWith':
-        return `%${value}`;
-      case 'like':
-      default:
-        return `%${value}%`;
-    }
-  }
-
-  /**
-   * Build a `WhereOptions` for a single string field under a given match mode.
-   * Supports arrays (OR semantics) when `mode !== 'exact'`.
-   * @private
-   */
-  private static stringFieldCondition(
-    field: string,
-    value: string | string[],
-    mode: StringMatch
-  ): WhereOptions {
-    if (Array.isArray(value)) {
-      if (mode === 'exact') return { [field]: { [Op.in]: value } };
-      return {
-        [Op.or]: value.map((v) => ({
-          [field]: { [Op.like]: this.patternFor(v, mode) },
-        })),
-      };
-    }
-    if (mode === 'exact') return { [field]: value };
-    return { [field]: { [Op.like]: this.patternFor(value, mode) } };
-  }
-
-  /**
-   * Build the composite WHERE clause for `list`/`filter` operations from
-   * free-text `q` and structured `filters`.
-   * @private
-   */
-  private static buildUserWhere(
-    q?: string,
-    filters?: UserFilters
-  ): WhereOptions {
-    const andParts: WhereOptions[] = [];
-
-    if (q && q.trim()) {
-      const like = `%${q.trim()}%`;
-      andParts.push({
-        [Op.or]: [
-          { username: { [Op.like]: like } },
-          { email: { [Op.like]: like } },
-          { firstName: { [Op.like]: like } },
-          { lastName: { [Op.like]: like } },
-          { userId: { [Op.like]: like } },
-        ],
+  static async delete(userId: string): Promise<{ success: true }> {
+    return withTransaction(async (t) => {
+      const deletedCount = await UserModel.destroy({
+        where: { userId },
+        transaction: t,
       });
-    }
-
-    if (filters) {
-      const match: StringMatch = filters.match ?? 'like';
-
-      if (filters.userId)
-        andParts.push(
-          this.stringFieldCondition('userId', filters.userId, match)
-        );
-      if (filters.username)
-        andParts.push(
-          this.stringFieldCondition('username', filters.username, match)
-        );
-      if (filters.firstName)
-        andParts.push(
-          this.stringFieldCondition('firstName', filters.firstName, match)
-        );
-      if (filters.lastName)
-        andParts.push(
-          this.stringFieldCondition('lastName', filters.lastName, match)
-        );
-      if (filters.email)
-        andParts.push(this.stringFieldCondition('email', filters.email, match));
-
-      if (typeof filters.verified === 'boolean') {
-        andParts.push({ verified: filters.verified });
-      }
-
-      if (filters.createdAtFrom || filters.createdAtTo) {
-        const cond: any = {};
-        if (filters.createdAtFrom)
-          cond[Op.gte] = new Date(filters.createdAtFrom);
-        if (filters.createdAtTo) cond[Op.lte] = new Date(filters.createdAtTo);
-        andParts.push({ createdAt: cond });
-      }
-      if (filters.updatedAtFrom || filters.updatedAtTo) {
-        const cond: any = {};
-        if (filters.updatedAtFrom)
-          cond[Op.gte] = new Date(filters.updatedAtFrom);
-        if (filters.updatedAtTo) cond[Op.lte] = new Date(filters.updatedAtTo);
-        andParts.push({ updatedAt: cond });
-      }
-    }
-
-    return andParts.length ? ({ [Op.and]: andParts } as WhereOptions) : {};
+      if (!deletedCount) throw new NotFoundError('User not found');
+      return { success: true };
+    });
   }
 }
 
-/** Named export alias (current project style). */
 export const userService = UserService;

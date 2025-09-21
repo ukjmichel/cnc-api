@@ -68,6 +68,10 @@ import {
  * - Removes any top-level `role` from the user row.
  * - If input already has `authorization.role`, it is respected.
  * - If input only has `role`, it is moved to `authorization.role`.
+ *
+ * @template T extends Record<string, any>
+ * @param {T} u - Raw user row/object (e.g., Sequelize JSON).
+ * @returns {T & { authorization: { role: string } | null }} Normalized user object.
  */
 function serializeUserForResponse<T extends Record<string, any>>(u: T) {
   if (!u) return u as any;
@@ -78,7 +82,13 @@ function serializeUserForResponse<T extends Record<string, any>>(u: T) {
   };
 }
 
-/** Normalize an array of users for API responses. */
+/**
+ * Normalize an array of users for API responses.
+ *
+ * @template T extends Record<string, any>
+ * @param {T[]} users - Array of user rows/objects.
+ * @returns {(T & { authorization: { role: string } | null })[]} Normalized users.
+ */
 function serializeUsers<T extends Record<string, any>>(users: T[]) {
   return users.map(serializeUserForResponse);
 }
@@ -86,7 +96,34 @@ function serializeUsers<T extends Record<string, any>>(users: T[]) {
 export class UserController {
   // ========= CREATE (TX) =========
 
-  /** POST /api/users — Create with default role "user" */
+  /**
+   * Create a new user with the default role `"user"`.
+   *
+   * @route POST /api/users
+   * @auth Public (or guarded upstream)
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   *
+   * @body {CreateUserDTO} req.body
+   * @returns {Promise<void>} 201 Created — `{ data: { user } }`
+   *
+   * @example
+   * // Request body
+   * {
+   *   "username": "alice",
+   *   "firstName": "Alice",
+   *   "lastName": "Doe",
+   *   "email": "alice@example.com",
+   *   "password": "secret123"
+   * }
+   *
+   * @errors
+   * - 400 Validation error
+   * - 409 Conflict (duplicate email/username)
+   * - 500 Internal error
+   */
   static async create(req: Request, res: Response, next: NextFunction) {
     const payload = req.body as CreateUserDTO;
 
@@ -114,7 +151,25 @@ export class UserController {
     }
   }
 
-  /** POST /api/users/employee — Create with role "employee" */
+  /**
+   * Create a new employee with role `"employee"`.
+   *
+   * @route POST /api/users/employee
+   * @auth Admin-only (enforced by middleware)
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   *
+   * @body {CreateUserDTO} req.body
+   * @returns {Promise<void>} 201 Created — `{ data: { user } }`
+   *
+   * @errors
+   * - 400 Validation error
+   * - 403 Forbidden
+   * - 409 Conflict
+   * - 500 Internal error
+   */
   static async createEmployee(req: Request, res: Response, next: NextFunction) {
     const payload = req.body as CreateUserDTO;
 
@@ -144,7 +199,22 @@ export class UserController {
 
   // ========= READS =========
 
-  /** GET /api/users/:id */
+  /**
+   * Get a user by ID.
+   *
+   * @route GET /api/users/:id
+   * @auth Protected (middleware)
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @pathParam {string} req.params.id - User ID.
+   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   *
+   * @errors
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
       const user = await UserService.getById(req.params.id);
@@ -154,7 +224,22 @@ export class UserController {
     }
   }
 
-  /** GET /api/users/by-email?email=... */
+  /**
+   * Get a user by email.
+   *
+   * @route GET /api/users/by-email?email={email}
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @query {string} email - Email address.
+   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   *
+   * @errors
+   * - 400 Missing/invalid email
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async getByEmail(req: Request, res: Response, next: NextFunction) {
     try {
       const email = String(req.query.email ?? '');
@@ -165,7 +250,22 @@ export class UserController {
     }
   }
 
-  /** GET /api/users/by-username?username=... */
+  /**
+   * Get a user by username.
+   *
+   * @route GET /api/users/by-username?username={username}
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @query {string} username - Username.
+   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   *
+   * @errors
+   * - 400 Missing/invalid username
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async getByUsername(req: Request, res: Response, next: NextFunction) {
     try {
       const username = String(req.query.username ?? '');
@@ -177,8 +277,26 @@ export class UserController {
   }
 
   /**
-   * GET /api/users
-   * Paginated list with optional free-text `q` and controller-side role filter `?role=`.
+   * List users with pagination and optional free-text query.
+   * A controller-side role filter can be applied via `?role=user|employee|administrator`.
+   *
+   * @route GET /api/users
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   *
+   * @query {string} [q] - Free-text search.
+   * @query {string} [sort] - Sort string (e.g., "createdAt:desc").
+   * @query {number} [page=1] - Page number.
+   * @query {number} [pageSize=20] - Page size.
+   * @query {"user"|"employee"|"administrator"} [role] - Controller-side filter.
+   *
+   * @returns {Promise<void>} 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
+   *
+   * @errors
+   * - 400 Invalid query
+   * - 500 Internal error
    */
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
@@ -209,8 +327,20 @@ export class UserController {
   }
 
   /**
-   * GET /api/users/filter
-   * Advanced filter + free-text `q`, with optional controller-side role filter `?role=`.
+   * Advanced filter endpoint (server-side structured filters + `q`).
+   * Supports the same controller-side role filter as `list`.
+   *
+   * @route GET /api/users/filter
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   *
+   * @returns {Promise<void>} 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
+   *
+   * @errors
+   * - 400 Invalid filters
+   * - 500 Internal error
    */
   static async filter(req: Request, res: Response, next: NextFunction) {
     try {
@@ -242,7 +372,24 @@ export class UserController {
 
   // ========= MUTATIONS =========
 
-  /** PATCH /api/users/:id */
+  /**
+   * Update profile fields (no password change).
+   *
+   * @route PATCH /api/users/:id
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @pathParam {string} req.params.id - User ID.
+   * @body {UpdateUserDTO} req.body
+   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   *
+   * @errors
+   * - 400 Validation error
+   * - 403 Forbidden
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async update(req: Request, res: Response, next: NextFunction) {
     try {
       const user = await UserService.update(
@@ -255,7 +402,24 @@ export class UserController {
     }
   }
 
-  /** PATCH /api/users/:id/password */
+  /**
+   * Change a user's password.
+   *
+   * @route PATCH /api/users/:id/password
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @pathParam {string} req.params.id - User ID.
+   * @body {ChangePasswordDTO} req.body
+   * @returns {Promise<void>} 200 OK — `{ data: { success: true } }`
+   *
+   * @errors
+   * - 400 Validation error or weak password
+   * - 403 Forbidden / invalid current password
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async changePassword(req: Request, res: Response, next: NextFunction) {
     try {
       const out = await UserService.changePassword(
@@ -268,7 +432,24 @@ export class UserController {
     }
   }
 
-  /** PATCH /api/users/:id/verified */
+  /**
+   * Set a user's verification status.
+   *
+   * @route PATCH /api/users/:id/verified
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @pathParam {string} req.params.id - User ID.
+   * @body {{ verified: boolean }} req.body
+   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   *
+   * @errors
+   * - 400 Invalid body
+   * - 403 Forbidden
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async setVerified(req: Request, res: Response, next: NextFunction) {
     try {
       const { verified } = req.body as { verified: boolean };
@@ -282,7 +463,22 @@ export class UserController {
     }
   }
 
-  /** DELETE /api/users/:id */
+  /**
+   * Delete a user.
+   *
+   * @route DELETE /api/users/:id
+   *
+   * @param {Request} req - Express request.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Error handler.
+   * @pathParam {string} req.params.id - User ID.
+   * @returns {Promise<void>} 200 OK — `{ data: { success: true } }`
+   *
+   * @errors
+   * - 403 Forbidden
+   * - 404 Not Found
+   * - 500 Internal error
+   */
   static async remove(req: Request, res: Response, next: NextFunction) {
     try {
       const out = await UserService.delete(req.params.id);
