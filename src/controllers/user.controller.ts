@@ -15,7 +15,7 @@
  *  - Creation still writes `role` on the UserModel; the controller strips it from responses.
  *
  * Role handling
- *  - Accepts query param: ?role=user|employee|administrator (controller-side filter on response).
+ *  - Accepts query param: ?role=user|employee|administrator (DB-side filter via query builders/service).
  *
  * Endpoints
  *  - POST   /api/users                   → create (role = "user" by default, TX)
@@ -53,45 +53,11 @@ import type {
 import {
   buildUserListQuery,
   buildUserFilterQuery,
-  qsRole,
 } from '../queries/user.queries.js';
-
-/**
- * Normalize a user object for API responses.
- *
- * Ensures the shape:
- * {
- *   userId, username, firstName, lastName, email, verified, createdAt, updatedAt,
- *   authorization: { role } | null
- * }
- *
- * - Removes any top-level `role` from the user row.
- * - If input already has `authorization.role`, it is respected.
- * - If input only has `role`, it is moved to `authorization.role`.
- *
- * @template T extends Record<string, any>
- * @param {T} u - Raw user row/object (e.g., Sequelize JSON).
- * @returns {T & { authorization: { role: string } | null }} Normalized user object.
- */
-function serializeUserForResponse<T extends Record<string, any>>(u: T) {
-  if (!u) return u as any;
-  const role = u.role ?? u.authorization?.role ?? null;
-  const { role: _omitRole, authorization: _omitAuth, ...rest } = u;
-  return { ...rest, authorization: role ? { role } : null } as T & {
-    authorization: { role: string } | null;
-  };
-}
-
-/**
- * Normalize an array of users for API responses.
- *
- * @template T extends Record<string, any>
- * @param {T[]} users - Array of user rows/objects.
- * @returns {(T & { authorization: { role: string } | null })[]} Normalized users.
- */
-function serializeUsers<T extends Record<string, any>>(users: T[]) {
-  return users.map(serializeUserForResponse);
-}
+import {
+  serializeUserForResponse,
+  serializeUsers,
+} from '../serializers/user.serializer.js';
 
 export class UserController {
   // ========= CREATE (TX) =========
@@ -278,7 +244,7 @@ export class UserController {
 
   /**
    * List users with pagination and optional free-text query.
-   * A controller-side role filter can be applied via `?role=user|employee|administrator`.
+   * A role filter can be applied via `?role=user|employee|administrator` (DB-side).
    *
    * @route GET /api/users
    *
@@ -290,7 +256,7 @@ export class UserController {
    * @query {string} [sort] - Sort string (e.g., "createdAt:desc").
    * @query {number} [page=1] - Page number.
    * @query {number} [pageSize=20] - Page size.
-   * @query {"user"|"employee"|"administrator"} [role] - Controller-side filter.
+   * @query {"user"|"employee"|"administrator"} [role] - DB-side filter.
    *
    * @returns {Promise<void>} 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
    *
@@ -300,25 +266,19 @@ export class UserController {
    */
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
-      const role = qsRole(req.query.role);
       const query = buildUserListQuery(req.query as Record<string, unknown>);
-
       const result = await UserService.list(query);
 
+      // Users are already filtered/paginated at the DB layer.
       const normalized = serializeUsers(result.users as any[]);
-      const filtered = role
-        ? normalized.filter((u: any) => u.authorization?.role === role)
-        : normalized;
 
       return res.json({
-        data: { users: filtered },
+        data: { users: normalized },
         meta: {
-          total: role ? filtered.length : result.total,
+          total: result.total,
           page: result.page,
           pageSize: result.pageSize,
-          pages: role
-            ? Math.max(1, Math.ceil(filtered.length / result.pageSize))
-            : result.pages,
+          pages: result.pages,
         },
       });
     } catch (err) {
@@ -328,7 +288,7 @@ export class UserController {
 
   /**
    * Advanced filter endpoint (server-side structured filters + `q`).
-   * Supports the same controller-side role filter as `list`.
+   * Supports the same DB-side role filter as `list`.
    *
    * @route GET /api/users/filter
    *
@@ -344,25 +304,19 @@ export class UserController {
    */
   static async filter(req: Request, res: Response, next: NextFunction) {
     try {
-      const role = qsRole(req.query.role);
       const query = buildUserFilterQuery(req.query as Record<string, unknown>);
-
       const result = await UserService.filter(query);
 
+      // Users are already filtered/paginated at the DB layer.
       const normalized = serializeUsers(result.users as any[]);
-      const filtered = role
-        ? normalized.filter((u: any) => u.authorization?.role === role)
-        : normalized;
 
       return res.json({
-        data: { users: filtered },
+        data: { users: normalized },
         meta: {
-          total: role ? filtered.length : result.total,
+          total: result.total,
           page: result.page,
           pageSize: result.pageSize,
-          pages: role
-            ? Math.max(1, Math.ceil(filtered.length / result.pageSize))
-            : result.pages,
+          pages: result.pages,
         },
       });
     } catch (err) {

@@ -1,3 +1,5 @@
+// src/services/user.service.ts
+
 /**
  * =============================================================================
  * UserService — Business Logic Layer for User Accounts
@@ -11,8 +13,7 @@
  *
  * Extras
  *  - Role-aware list/filter: exposes only `authorization: { role } | null`.
- *  - Accept optional `authRole` (single or array) to include only users
- *    who have one of those roles in AuthorizationModel.
+ *  - Supports `authRole` (single or array) to filter by AuthorizationModel.role.
  *
  * Conventions
  *  - Use `withTransaction` when a method performs a multi-step change.
@@ -29,7 +30,6 @@ import {
   type ChangePasswordDTO,
   type ListUsersQuery,
   type UserFilters,
-  type StringMatch,
   type ApiUser,
 } from '../types/user.js';
 
@@ -43,144 +43,9 @@ import {
   serializeUsers,
 } from '../serializers/user.serializer.js';
 
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                     */
-/* -------------------------------------------------------------------------- */
+// Reused helpers moved to queries module
+import { buildUserWhere, normalizeRoles } from '../queries/user.queries.js';
 
-/**
- * Normalize a role or array of roles into an array (or `undefined` if falsy).
- * @param {Role | Role[] | undefined} input - A single role, a list of roles, or undefined.
- * @returns {Role[] | undefined} An array of roles, or `undefined` if no input.
- */
-function normalizeRoles(input?: Role | Role[]): Role[] | undefined {
-  if (!input) return undefined;
-  return Array.isArray(input) ? input : [input];
-}
-
-/**
- * Build a SQL LIKE/ILIKE pattern from a value and match mode.
- * @param {string} value - The input string to patternize.
- * @param {StringMatch} mode - Matching mode: 'exact' | 'startsWith' | 'endsWith' | 'like'.
- * @returns {string} A pattern suitable for use with Sequelize LIKE.
- */
-function patternFor(value: string, mode: StringMatch) {
-  switch (mode) {
-    case 'exact':
-      return value;
-    case 'startsWith':
-      return `${value}%`;
-    case 'endsWith':
-      return `%${value}`;
-    case 'like':
-    default:
-      return `%${value}%`;
-  }
-}
-
-/**
- * Create a WHERE condition for a single string field using a value or array of values.
- * @param {string} field - Column/attribute name.
- * @param {string | string[]} value - One or many values to match.
- * @param {StringMatch} mode - Matching mode.
- * @returns {WhereOptions} A Sequelize where fragment.
- */
-function stringFieldCondition(
-  field: string,
-  value: string | string[],
-  mode: StringMatch
-): WhereOptions {
-  if (Array.isArray(value)) {
-    if (mode === 'exact') return { [field]: { [Op.in]: value } };
-    return {
-      [Op.or]: value.map((v) => ({
-        [field]: { [Op.like]: patternFor(v, mode) },
-      })),
-    };
-  }
-  if (mode === 'exact') return { [field]: value };
-  return { [field]: { [Op.like]: patternFor(value, mode) } };
-}
-
-/**
- * Build a composite WHERE clause for users using free-text `q` and structured filters.
- * @param {string | undefined} q - Free-text query applied across common string fields.
- * @param {UserFilters | undefined} filters - Structured filters (ids, names, email, dates, verified).
- * @returns {WhereOptions} Combined Sequelize where clause (possibly empty object).
- */
-function buildUserWhere(q?: string, filters?: UserFilters): WhereOptions {
-  const andParts: WhereOptions[] = [];
-
-  if (q && q.trim()) {
-    const like = `%${q.trim()}%`;
-    andParts.push({
-      [Op.or]: [
-        { username: { [Op.like]: like } },
-        { email: { [Op.like]: like } },
-        { firstName: { [Op.like]: like } },
-        { lastName: { [Op.like]: like } },
-        { userId: { [Op.like]: like } },
-      ],
-    });
-  }
-
-  if (filters) {
-    const match: StringMatch = filters.match ?? 'like';
-
-    if (filters.userId)
-      andParts.push(stringFieldCondition('userId', filters.userId, match));
-    if (filters.username)
-      andParts.push(stringFieldCondition('username', filters.username, match));
-    if (filters.firstName)
-      andParts.push(
-        stringFieldCondition('firstName', filters.firstName, match)
-      );
-    if (filters.lastName)
-      andParts.push(stringFieldCondition('lastName', filters.lastName, match));
-    if (filters.email)
-      andParts.push(stringFieldCondition('email', filters.email, match));
-
-    if (typeof filters.verified === 'boolean') {
-      andParts.push({ verified: filters.verified });
-    }
-
-    if (filters.createdAtFrom || filters.createdAtTo) {
-      const cond: any = {};
-      if (filters.createdAtFrom) cond[Op.gte] = new Date(filters.createdAtFrom);
-      if (filters.createdAtTo) cond[Op.lte] = new Date(filters.createdAtTo);
-      andParts.push({ createdAt: cond });
-    }
-    if (filters.updatedAtFrom || filters.updatedAtTo) {
-      const cond: any = {};
-      if (filters.updatedAtFrom) cond[Op.gte] = new Date(filters.updatedAtFrom);
-      if (filters.updatedAtTo) cond[Op.lte] = new Date(filters.updatedAtTo);
-      andParts.push({ updatedAt: cond });
-    }
-  }
-
-  return andParts.length ? ({ [Op.and]: andParts } as WhereOptions) : {};
-}
-
-/* -------------------------------------------------------------------------- */
-/* Service                                                                     */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Business logic layer for user accounts.
- *
- * @remarks
- * - Encapsulates all DB operations around {@link UserModel}.
- * - Validates existence before mutations, throwing {@link NotFoundError}.
- * - Handles uniqueness conflicts by mapping {@link UniqueConstraintError} to {@link DuplicateError}.
- * - Returns serialized {@link ApiUser} objects (without password) and paginated collections.
- *
- * @extras
- * - Role-aware list/filter via {@link AuthorizationModel}, exposing only `authorization: { role } | null`.
- * - Accepts optional `authRole` (single or array) to include only users with those roles.
- *
- * @conventions
- * - Use {@link withTransaction} when a method performs a multi-step change.
- * - Leave HTTP concerns (status codes, response envelopes) to controllers.
- */
 export class UserService {
   /* ============================== CREATE =============================== */
 
@@ -252,42 +117,42 @@ export class UserService {
     return serializeUser(user.toJSON());
   }
 
+  /* ================================ LIST =============================== */
+
   /**
-   * List users with optional role filter (via AuthorizationModel).
+   * List users with optional role filters (via AuthorizationModel).
    *
-   * @param {ListUsersQuery} [query] - Pagination, sorting and free-text query.
-   * @param {number} [query.page=1] - 1-based page index.
-   * @param {number} [query.pageSize=20] - Page size limit.
-   * @param {string} [query.q] - Free-text search across several fields.
-   * @param {Role|Role[]} [query.authRole] - Filter to users that have one of the roles.
-   * @param {keyof ApiUser | 'createdAt' | 'updatedAt'} [query.orderBy='createdAt'] - Order column.
-   * @param {'ASC'|'DESC'} [query.orderDir='DESC'] - Order direction.
+   * @param {ListUsersQuery & { authRole?: Role | Role[] }} [query]
+   *  - `authRole`: filter by AuthorizationModel.role (single or array)
+   *  - plus standard paging/sorting and `q`
    * @returns {Promise<{ users: ApiUser[]; total: number; page: number; pageSize: number; pages: number }>}
-   * Serialized users with pagination meta. `authorization` includes `{ role }` or `null`.
    */
   static async list(query: ListUsersQuery = {}) {
     const {
       page = 1,
       pageSize = 20,
       q,
-      authRole,
       orderBy = 'createdAt',
       orderDir = 'DESC',
-    } = query as ListUsersQuery & { authRole?: Role | Role[] };
+    } = query as ListUsersQuery;
+
+    const { authRole } = query as ListUsersQuery & {
+      authRole?: Role | Role[];
+    };
 
     // Base WHERE from q
     let where = buildUserWhere(q, undefined);
 
-    // Role filter through authorization table
-    const roles = normalizeRoles(authRole);
-    if (roles?.length) {
+    // Apply role filter via AuthorizationModel
+    const roleList = normalizeRoles(authRole);
+    if (roleList?.length) {
       const authRows = await AuthorizationModel.findAll({
         attributes: ['userId'],
-        where: { role: { [Op.in]: roles } },
+        where: { role: { [Op.in]: roleList } },
       });
       const ids = authRows.map((a) => a.userId);
-      if (ids.length === 0) {
-        return { users: [] as ApiUser[], total: 0, page, pageSize, pages: 1 };
+      if (!ids.length) {
+        return { users: [], total: 0, page, pageSize, pages: 1 };
       }
       where = {
         [Op.and]: [where, { userId: { [Op.in]: ids } }],
@@ -330,13 +195,14 @@ export class UserService {
     };
   }
 
+  /* ============================== FILTER =============================== */
+
   /**
    * Advanced filter with optional role & verified flags.
    * Supports all `ListUsersQuery` fields and structured `filters`.
    *
-   * @param {ListUsersQuery} [query] - Query object with pagination, sort, `q`, `filters`, `authRole`, `verified`.
+   * @param {ListUsersQuery & { authRole?: Role | Role[]; verified?: boolean }} [query]
    * @returns {Promise<{ users: ApiUser[]; total: number; page: number; pageSize: number; pages: number }>}
-   * Serialized users with pagination meta. `authorization` includes `{ role }` or `null`.
    */
   static async filter(query: ListUsersQuery = {}) {
     const {
@@ -344,13 +210,13 @@ export class UserService {
       pageSize = 20,
       q,
       filters,
-      authRole,
-      verified,
       orderBy = 'createdAt',
       orderDir = 'DESC',
-    } = query as ListUsersQuery & {
-      verified?: boolean;
+    } = query as ListUsersQuery;
+
+    const { authRole, verified } = query as ListUsersQuery & {
       authRole?: Role | Role[];
+      verified?: boolean;
     };
 
     const mergedFilters: UserFilters | undefined =
@@ -361,16 +227,16 @@ export class UserService {
     // WHERE from q + structured filters
     let where = buildUserWhere(q, mergedFilters);
 
-    // Role filter via AuthorizationModel
-    const roles = normalizeRoles(authRole);
-    if (roles?.length) {
+    // Apply role filter via AuthorizationModel
+    const roleList = normalizeRoles(authRole);
+    if (roleList?.length) {
       const authRows = await AuthorizationModel.findAll({
         attributes: ['userId'],
-        where: { role: { [Op.in]: roles } },
+        where: { role: { [Op.in]: roleList } },
       });
       const ids = authRows.map((a) => a.userId);
-      if (ids.length === 0) {
-        return { users: [] as ApiUser[], total: 0, page, pageSize, pages: 1 };
+      if (!ids.length) {
+        return { users: [], total: 0, page, pageSize, pages: 1 };
       }
       where = {
         [Op.and]: [where, { userId: { [Op.in]: ids } }],
