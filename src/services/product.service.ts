@@ -40,6 +40,8 @@ import type {
 } from '../types/product.js';
 
 import { NotFoundError, DuplicateError } from '../errors/index.js';
+import { ProductImageModel } from '../models/product-image.model.js';
+import { publicUrlToAbsPathIfLocal, tryUnlink } from '../utils/upload.js';
 
 export class ProductService {
   // ===== CRUD =====
@@ -121,14 +123,48 @@ export class ProductService {
   }
 
   static async delete(productId: string) {
-    return withTransaction(async (t: Transaction) => {
-      const deletedCount = await ProductModel.destroy({
+    // We'll collect URLs inside the TX, then delete files after commit
+    const urlsToDelete: string[] = [];
+
+    await withTransaction(async (t: Transaction) => {
+      // 1) Ensure product exists (lock for update)
+      const product = await ProductModel.findByPk(productId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (!product) throw new NotFoundError('Product not found');
+
+      // 2) Find related images and collect URLs
+      const imgs = await ProductImageModel.findAll({
+        where: { productId },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      urlsToDelete.push(...imgs.map((r) => r.get('url') as string));
+
+      // 3) Explicitly delete image rows (don’t rely on DB cascade so we control cleanup)
+      if (imgs.length) {
+        await ProductImageModel.destroy({
+          where: { productId },
+          transaction: t,
+        });
+      }
+
+      // 4) Delete product
+      await ProductModel.destroy({
         where: { productId },
         transaction: t,
       });
-      if (!deletedCount) throw new NotFoundError('Product not found');
-      return { success: true };
     });
+
+    // 5) After commit: best-effort unlink local files
+    await Promise.all(
+      urlsToDelete.map((u) =>
+        tryUnlink(publicUrlToAbsPathIfLocal(u), 'product.service')
+      )
+    );
+
+    return { success: true };
   }
 
   // ===== LIST & FILTER =====

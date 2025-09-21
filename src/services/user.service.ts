@@ -17,8 +17,6 @@
 import {
   Op,
   UniqueConstraintError,
-  Transaction,
-  type TransactionOptions,
 } from 'sequelize';
 import type { FindOptions, WhereOptions } from 'sequelize';
 

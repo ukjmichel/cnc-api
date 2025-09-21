@@ -6,15 +6,17 @@ services:
     container_name: cnc_mysql
     env_file:
       - .env
-    # Expose MySQL to your host (container always listens on 3306)
     ports:
-      - "${HOST_MYSQL_PORT:-3314}:3306"
+      - '${HOST_MYSQL_PORT:-3314}:3306'
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d
     healthcheck:
-      # NOTE: escape $ inside Compose
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      test:
+        [
+          'CMD-SHELL',
+          'mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1',
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -27,14 +29,17 @@ services:
     container_name: cnc_api
     env_file:
       - .env
-    # Only override what's different inside the Compose network
     environment:
-      MYSQL_HOST: db
+    
+      TZ: UTC
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "${HOST_APP_PORT:-3000}:${PORT:-3000}"
+      - '${HOST_APP_PORT:-3000}:${PORT:-3000}'
+    volumes:
+      # bind host ./uploads to /app/uploads in container
+      - ./uploads:/app/uploads
     restart: unless-stopped
 
 volumes:

@@ -3,3 +3,4 @@ export * from './NotFoundError.js';
 export * from './DuplicateError.js';
 export * from './ForbiddenError.js';
 export * from './BadRequestError.js';
+export * from './ConflictError.js';

@@ -9,6 +9,7 @@
  * Endpoints
  *  - POST   /                    → create
  *  - POST   /upsert              → upsertVariant (create-or-update by { productId, variant })
+ *  - POST   /upload              → upload (multipart: fields + file "image"; creates DB row)
  *  - GET    /                    → list (q + sort + pagination)
  *  - GET    /filter              → filter (advanced filters + q)
  *  - GET    /by-product          → getByProductAndVariant (?productId= & variant=)
@@ -25,6 +26,7 @@
 
 import { Router } from 'express';
 import { ProductImageController } from '../controllers/product-image.controller.js';
+import { singleProductImage } from '../config/multer.config.js';
 
 const productImageRouter = Router();
 
@@ -33,6 +35,13 @@ productImageRouter.post('/', ProductImageController.create);
 
 // Upsert by (productId, variant)
 productImageRouter.post('/upsert', ProductImageController.upsertVariant);
+
+// Upload (multipart/form-data; file field "image")
+productImageRouter.post(
+  '/upload',
+  singleProductImage('image'),
+  ProductImageController.createWithUpload
+);
 
 // Reads
 productImageRouter.get('/', ProductImageController.list);
@@ -50,5 +59,9 @@ productImageRouter.delete(
   ProductImageController.deleteByProductAndVariant
 );
 productImageRouter.delete('/:id', ProductImageController.remove);
+productImageRouter.delete(
+  '/by-product/:productId',
+  ProductImageController.deleteAllByProduct
+);
 
 export default productImageRouter;

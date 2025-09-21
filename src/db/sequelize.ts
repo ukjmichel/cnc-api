@@ -1,12 +1,8 @@
 // src/db/sequelize.ts
-/**
- * Sequelize bootstrap & DB utilities (sequelize-typescript).
- */
 import { Sequelize } from 'sequelize-typescript';
 import { config } from '../config/env.js';
-import { UserModel } from '../models/user.model.js';
-import { AuthorizationModel } from '../models/authorization.model.js';
-import { ProductModel } from '../models/product.model.js';
+import { registerAssociations } from '../models/associations.js';
+
 
 const logging = config.dbLogSql ? (sql: string) => console.log(sql) : false;
 
@@ -19,12 +15,13 @@ export const sequelize = new Sequelize({
   password: config.mysqlPassword,
   logging,
   pool: config.mysqlPool,
-  models: [UserModel, AuthorizationModel,ProductModel], // <-- register all models here
   define: { timestamps: true, underscored: false },
   timezone: '+00:00',
 });
 
-/** Connect and (optionally) sync schema based on config.dbSync. */
+// Add models and wire associations after constructing Sequelize
+registerAssociations(sequelize);
+
 export async function initDb(): Promise<void> {
   await sequelize.authenticate();
 
@@ -53,11 +50,9 @@ export async function initDb(): Promise<void> {
 export async function pingDb(): Promise<void> {
   await sequelize.authenticate();
 }
-
 export async function closeDb(): Promise<void> {
   await sequelize.close();
 }
-
 export function registerDbShutdown(): void {
   const handler = async () => {
     try {

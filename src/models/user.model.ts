@@ -18,7 +18,7 @@ import {
 } from 'sequelize-typescript';
 import bcrypt from 'bcrypt';
 import { Optional } from 'sequelize';
-import { UserAttributes, UserCreationAttributes } from '../types/user';
+import { UserAttributes, UserCreationAttributes } from '../types/user.js';
 
 // ----- Model -----
 @Table({

@@ -48,7 +48,7 @@ import type {
   UpdateProductImageDTO,
 } from '../types/product-image.js';
 import { PRODUCT_IMAGE_VARIANTS } from '../types/product-image.js';
-import { ProductImageModel } from '../models/product-image.mode.js';
+import { ProductImageModel } from '../models/product-image.model.js';
 
 // ---- small helpers ----
 const ALLOWED_VARIANTS = new Set<string>(
@@ -249,6 +249,34 @@ export class ProductImageService {
       });
       if (!n) throw new NotFoundError('Image not found');
       return { success: true };
+    });
+  }
+
+  /**
+   * Delete ALL images for a given productId.
+   * Returns how many rows were deleted and the URLs (so the controller can remove files).
+   */
+  static async deleteAllByProduct(productId: string) {
+    return withTransaction(async (t: Transaction) => {
+      // Collect URLs first so we can remove files after DB delete
+      const rows = await ProductImageModel.findAll({
+        where: { productId },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      if (!rows.length) {
+        throw new NotFoundError('No images found for this product');
+      }
+
+      const urls = rows.map((r) => r.toJSON().url);
+
+      const deleted = await ProductImageModel.destroy({
+        where: { productId },
+        transaction: t,
+      });
+
+      return { success: true, deleted, urls };
     });
   }
 
