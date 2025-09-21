@@ -55,11 +55,21 @@ const ALLOWED_VARIANTS = new Set<string>(
   PRODUCT_IMAGE_VARIANTS as unknown as string[]
 );
 
+/**
+ * Check whether a string is a valid product image variant.
+ * @param {string} v - Variant to test.
+ * @returns {v is ProductImageVariant} True if the value is allowed.
+ */
 function isAllowedVariant(v: string): v is ProductImageVariant {
   return ALLOWED_VARIANTS.has(v);
 }
 
-// very light URL sanity check (allow http(s) or absolute/relative paths)
+/**
+ * Very light URL sanity check.
+ * Accepts http(s) URLs or absolute/relative paths (starts with "/").
+ * @param {string} v - The URL string.
+ * @returns {boolean} True if it looks like a valid URL/path.
+ */
 function isLikelyUrl(v: string) {
   return /^https?:\/\/|^\//i.test(v);
 }
@@ -67,6 +77,15 @@ function isLikelyUrl(v: string) {
 export class ProductImageService {
   // ===== CRUD =====
 
+  /**
+   * Create a product image.
+   *
+   * @param {CreateProductImageDTO} data - Image payload (productId, variant, url, alt?).
+   * @returns {Promise<unknown>} Created image as plain JSON.
+   * @throws {BadRequestError} If required fields are missing/invalid.
+   * @throws {NotFoundError} If the product does not exist.
+   * @throws {DuplicateError} If (productId, variant) already exists.
+   */
   static async create(data: CreateProductImageDTO) {
     // Input validation with custom errors
     if (!data.productId?.trim()) {
@@ -113,12 +132,25 @@ export class ProductImageService {
     });
   }
 
+  /**
+   * Get a product image by its primary key.
+   * @param {string} imageId - Image ID.
+   * @returns {Promise<unknown>} Image as plain JSON.
+   * @throws {NotFoundError} If the image does not exist.
+   */
   static async getById(imageId: string) {
     const img = await ProductImageModel.findByPk(imageId);
     if (!img) throw new NotFoundError('Image not found');
     return img.toJSON();
   }
 
+  /**
+   * Get a product image by natural key (productId, variant).
+   * @param {string} productId - Product ID.
+   * @param {ProductImageVariant} variant - Image variant (e.g., "front", "back").
+   * @returns {Promise<unknown>} Image as plain JSON.
+   * @throws {NotFoundError} If no matching image exists.
+   */
   static async getByProductAndVariant(
     productId: string,
     variant: ProductImageVariant
@@ -130,6 +162,17 @@ export class ProductImageService {
     return img.toJSON();
   }
 
+  /**
+   * Update a product image.
+   * Only provided fields are validated and updated.
+   *
+   * @param {string} imageId - Image ID.
+   * @param {UpdateProductImageDTO} updates - Partial updates (url, variant, alt).
+   * @returns {Promise<unknown>} Updated image as plain JSON.
+   * @throws {BadRequestError} If supplied fields are invalid.
+   * @throws {NotFoundError} If the image does not exist.
+   * @throws {DuplicateError} If updating variant causes a (productId, variant) conflict.
+   */
   static async update(imageId: string, updates: UpdateProductImageDTO) {
     // Validate only provided fields
     if (
@@ -173,6 +216,12 @@ export class ProductImageService {
     });
   }
 
+  /**
+   * Delete a product image by ID.
+   * @param {string} imageId - Image ID.
+   * @returns {Promise<{ success: true }>} Success flag.
+   * @throws {NotFoundError} If no image was deleted.
+   */
   static async delete(imageId: string) {
     return withTransaction(async (t: Transaction) => {
       const n = await ProductImageModel.destroy({
@@ -188,7 +237,12 @@ export class ProductImageService {
 
   /**
    * Create or update an image by natural key (productId, variant).
-   * If exists → updates url/alt; else → creates.
+   * If an image exists, updates its url/alt. Otherwise, creates a new row.
+   *
+   * @param {CreateProductImageDTO} data - Payload containing productId, variant, url, alt?.
+   * @returns {Promise<unknown>} Upserted image as plain JSON.
+   * @throws {BadRequestError} If payload is invalid.
+   * @throws {NotFoundError} If product does not exist.
    */
   static async upsertVariant(data: CreateProductImageDTO) {
     // same validations as create
@@ -238,6 +292,13 @@ export class ProductImageService {
     });
   }
 
+  /**
+   * Delete an image by (productId, variant).
+   * @param {string} productId - Product ID.
+   * @param {ProductImageVariant} variant - Variant to delete.
+   * @returns {Promise<{ success: true }>} Success flag.
+   * @throws {NotFoundError} If no row was deleted.
+   */
   static async deleteByProductAndVariant(
     productId: string,
     variant: ProductImageVariant
@@ -253,8 +314,14 @@ export class ProductImageService {
   }
 
   /**
-   * Delete ALL images for a given productId.
-   * Returns how many rows were deleted and the URLs (so the controller can remove files).
+   * Delete **all** images for a product.
+   * Also returns the URLs so that callers can remove files from storage.
+   *
+   * @param {string} productId - Product ID.
+   * @returns {Promise<{ success: true; deleted: number; urls: string[] }>}
+   *   - `deleted`: number of DB rows removed
+   *   - `urls`: list of image URLs to clean up
+   * @throws {NotFoundError} If no images exist for the product.
    */
   static async deleteAllByProduct(productId: string) {
     return withTransaction(async (t: Transaction) => {
@@ -284,6 +351,14 @@ export class ProductImageService {
 
   /**
    * List images with optional free-text `q` across url/alt/productId.
+   *
+   * @param {ListProductImagesQuery} [query]
+   * @param {number} [query.page=1] - 1-based page number.
+   * @param {number} [query.pageSize=20] - Page size.
+   * @param {string} [query.q] - Free-text search term.
+   * @param {'createdAt'|'updatedAt'|'url'|'alt'|'productId'} [query.orderBy='createdAt']
+   * @param {'ASC'|'DESC'} [query.orderDir='DESC']
+   * @returns {Promise<{ images: unknown[]; total: number; page: number; pageSize: number; pages: number }>}
    */
   static async list(query: ListProductImagesQuery = {}) {
     const {
@@ -319,6 +394,15 @@ export class ProductImageService {
 
   /**
    * Filter images with structured filters + free-text `q`.
+   *
+   * @param {ListProductImagesQuery} [query]
+   * @param {number} [query.page=1]
+   * @param {number} [query.pageSize=20]
+   * @param {string} [query.q]
+   * @param {ProductImageFilters} [query.filters]
+   * @param {'createdAt'|'updatedAt'|'url'|'alt'|'productId'} [query.orderBy='createdAt']
+   * @param {'ASC'|'DESC'} [query.orderDir='DESC']
+   * @returns {Promise<{ images: unknown[]; total: number; page: number; pageSize: number; pages: number }>}
    */
   static async filter(query: ListProductImagesQuery = {}) {
     const {
@@ -354,6 +438,13 @@ export class ProductImageService {
 
   // ===== PRIVATE SEARCH HELPERS =====
 
+  /**
+   * Build a SQL LIKE pattern based on match mode.
+   * @param {string} value - Input value.
+   * @param {StringMatch} mode - Match mode.
+   * @returns {string} LIKE pattern.
+   * @private
+   */
   private static patternFor(value: string, mode: StringMatch) {
     switch (mode) {
       case 'exact':
@@ -368,6 +459,14 @@ export class ProductImageService {
     }
   }
 
+  /**
+   * Build a where fragment for a single string field with a scalar or array input.
+   * @param {string} field - Column/attribute name.
+   * @param {string|string[]} value - Value(s) to match.
+   * @param {StringMatch} mode - Matching mode.
+   * @returns {WhereOptions} Sequelize where fragment.
+   * @private
+   */
   private static stringFieldCondition(
     field: string,
     value: string | string[],
@@ -385,6 +484,13 @@ export class ProductImageService {
     return { [field]: { [Op.like]: this.patternFor(value, mode) } };
   }
 
+  /**
+   * Build the composite WHERE clause for images using free-text `q` and structured filters.
+   * @param {string} [q] - Free-text search applied to url/alt/productId.
+   * @param {ProductImageFilters} [filters] - Structured filters.
+   * @returns {WhereOptions} Combined where clause (or empty object).
+   * @private
+   */
   private static buildImageWhere(
     q?: string,
     filters?: ProductImageFilters

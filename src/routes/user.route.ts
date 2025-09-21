@@ -5,14 +5,25 @@
  * User routes — REST endpoints for user management
  * =============================================================================
  * Mount under: /api/users
+ *
+ * Notes
+ * - Roles are stored in AuthorizationModel (not on UserModel).
+ * - List/filter endpoints accept `?authRole=` (canonical) or `?role=` (alias)
+ *   to filter by authorization role at the DB level.
+ * - Setting a user's role is done via PATCH /api/users/:id/role.
+ * - Access control: all routes require Employee or Admin EXCEPT
+ *   - POST /api/users/employee (Admin only)
+ *   - PATCH /api/users/:id/role (Admin only)
  * =============================================================================
  */
 
 import { Router } from 'express';
 import { UserController } from '../controllers/user.controller.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
-import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
-// import { requireAuth } from '../middlewares/requireAuth.js'; // optional per route
+import {
+  requireEmployeeOrAdmin,
+  requireAdmin,
+} from '../middlewares/requireRole.js';
 
 export const userRouter = Router();
 
@@ -165,9 +176,50 @@ userRouter.post(
 
 /**
  * @swagger
+ * /api/users/employee:
+ *   post:
+ *     summary: Create an employee user (authorization role "employee")
+ *     description: Creates a new user and assigns AuthorizationModel role "employee".
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/UserCreateInput'
+ *     responses:
+ *       201:
+ *         description: Created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/DataUser'
+ *       400:
+ *         description: Validation error
+ *       403:
+ *         description: Forbidden
+ *       409:
+ *         description: Conflict (duplicate email/username)
+ *       500:
+ *         description: Internal error
+ */
+userRouter.post(
+  '/employee',
+  requireAuth,
+  requireAdmin,
+  UserController.createEmployee
+);
+
+/**
+ * @swagger
  * /api/users:
  *   get:
- *     summary: List users with pagination and optional role filter
+ *     summary: List users with pagination and optional authorization role filter
+ *     description: >
+ *       Filters by role stored in AuthorizationModel. Accepts `role` (alias) or `authRole` (canonical).
+ *       You may supply multiple values: `?authRole=employee&authRole=administrator`.
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -177,20 +229,38 @@ userRouter.post(
  *         schema: { type: string }
  *         description: Free-text search
  *       - in: query
- *         name: sort
- *         schema: { type: string, example: "createdAt:desc" }
- *       - in: query
  *         name: page
  *         schema: { type: integer, minimum: 1, default: 1 }
  *       - in: query
  *         name: pageSize
  *         schema: { type: integer, minimum: 1, default: 20 }
  *       - in: query
+ *         name: authRole
+ *         schema:
+ *           oneOf:
+ *             - type: string
+ *               enum: [user, employee, administrator]
+ *             - type: array
+ *               items:
+ *                 type: string
+ *                 enum: [user, employee, administrator]
+ *           example: [employee, administrator]
+ *         description: DB-side filter via AuthorizationModel.role (canonical)
+ *       - in: query
  *         name: role
  *         schema:
- *           type: string
- *           enum: [user, employee, administrator]
- *         description: Controller-side role filter applied after fetching
+ *           oneOf:
+ *             - type: string
+ *               enum: [user, employee, administrator]
+ *             - type: array
+ *               items:
+ *                 type: string
+ *                 enum: [user, employee, administrator]
+ *         description: Alias of `authRole`
+ *       - in: query
+ *         name: sort
+ *         schema: { type: string, example: "createdAt:desc" }
+ *         description: Sorting (field:dir). Supported fields: createdAt, updatedAt, username, firstName, lastName, email
  *     responses:
  *       200:
  *         description: OK
@@ -211,7 +281,10 @@ userRouter.get('/', requireAuth, requireEmployeeOrAdmin, UserController.list);
  * @swagger
  * /api/users/filter:
  *   get:
- *     summary: Advanced filter + q with optional role filter
+ *     summary: Advanced filter + q with optional authorization role filter
+ *     description: >
+ *       Filters by role stored in AuthorizationModel. Accepts `role` (alias) or `authRole` (canonical).
+ *       You may supply multiple values: `?authRole=user&authRole=employee`.
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -221,11 +294,27 @@ userRouter.get('/', requireAuth, requireEmployeeOrAdmin, UserController.list);
  *         schema: { type: string }
  *         description: Free-text search
  *       - in: query
+ *         name: authRole
+ *         schema:
+ *           oneOf:
+ *             - type: string
+ *               enum: [user, employee, administrator]
+ *             - type: array
+ *               items:
+ *                 type: string
+ *                 enum: [user, employee, administrator]
+ *         description: DB-side role filter via AuthorizationModel.role (canonical)
+ *       - in: query
  *         name: role
  *         schema:
- *           type: string
- *           enum: [user, employee, administrator]
- *         description: Controller-side role filter applied after fetching
+ *           oneOf:
+ *             - type: string
+ *               enum: [user, employee, administrator]
+ *             - type: array
+ *               items:
+ *                 type: string
+ *                 enum: [user, employee, administrator]
+ *         description: Alias of `authRole`
  *       - in: query
  *         name: page
  *         schema: { type: integer, minimum: 1, default: 1 }
@@ -235,6 +324,7 @@ userRouter.get('/', requireAuth, requireEmployeeOrAdmin, UserController.list);
  *       - in: query
  *         name: sort
  *         schema: { type: string, example: "createdAt:desc" }
+ *         description: Sorting (field:dir). Supported fields: createdAt, updatedAt, username, firstName, lastName, email
  *     responses:
  *       200:
  *         description: OK
@@ -520,4 +610,50 @@ userRouter.delete(
   requireAuth,
   requireEmployeeOrAdmin,
   UserController.remove
+);
+
+/**
+ * @swagger
+ * /api/users/{id}/role:
+ *   patch:
+ *     summary: Set a user's role (AuthorizationModel)
+ *     description: Assigns a role to a user in the AuthorizationModel. Returns the normalized user with `authorization: { role }`.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [role]
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [user, employee, administrator]
+ *     responses:
+ *       200:
+ *         description: Updated user
+ *       400:
+ *         description: Validation error
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal error
+ */
+userRouter.patch(
+  '/:id/role',
+  requireAuth,
+  requireAdmin,
+  UserController.setRole
 );

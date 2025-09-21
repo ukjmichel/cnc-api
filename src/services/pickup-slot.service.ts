@@ -4,6 +4,10 @@
  * =============================================================================
  * PickupSlotService — business logic for click-&-collect pickup slots
  * =============================================================================
+ * Purpose
+ *  - Encapsulates DB operations around PickupSlotModel (create/list/filter/generate).
+ *  - Returns **plain objects**; controllers handle response envelopes.
+ *
  * Capabilities
  *  - create: create a single slot (guards against duplicates/overlaps)
  *  - list:   simple listing with sort & pagination
@@ -17,6 +21,7 @@
  * Notes
  *  - Uses a readonly array for ORDER FIELDS to work with normalizeSort().
  *  - Works with date/time strings (no timezone calculus inside the service).
+ *  - Type contracts come from src/types/pickup-slot.ts to keep things DRY.
  * =============================================================================
  */
 
@@ -36,60 +41,15 @@ import {
 import { withTransaction } from '../utils/tx.js';
 import { normalizeSort } from '../utils/query.js';
 
-// If you have central types, prefer importing them.
-// These minimal interfaces keep this file self-contained for the new methods.
-export interface CreatePickupSlotDTO {
-  location: string;
-  date: string; // YYYY-MM-DD
-  startTime: string; // HH:mm or HH:mm:ss
-  endTime: string; // HH:mm or HH:mm:ss
-  capacity: number;
-}
-
-export interface PickupSlotFilters {
-  location?: string[]; // filter by locations (IN)
-  dateFrom?: string; // YYYY-MM-DD inclusive
-  dateTo?: string; // YYYY-MM-DD inclusive
-  dates?: string[]; // specific dates (IN)
-  startFrom?: string; // HH:mm
-  startTo?: string; // HH:mm
-  capacityMin?: number;
-  capacityMax?: number;
-}
-
-export type SlotOrderBy =
-  | 'date'
-  | 'startTime'
-  | 'endTime'
-  | 'capacity'
-  | 'createdAt'
-  | 'updatedAt';
-
-export interface ListPickupSlotsQuery {
-  filters?: PickupSlotFilters;
-  page?: number; // default 20 here
-  pageSize?: number; // default 20 here
-  orderBy?: SlotOrderBy;
-  orderDir?: 'ASC' | 'DESC';
-}
-
-type Weekday = 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
-
-export interface GenerateSlotsFromWeekScheduleParams {
-  location: string;
-  month: string; // YYYY-MM
-  intervalMinutes: number;
-  capacity: number;
-  schedule: Partial<Record<Weekday, Array<{ start: string; end: string }>>>;
-}
-
-export interface GenerateForDayParams {
-  location: string;
-  date: string; // YYYY-MM-DD
-  intervalMinutes: number;
-  capacity: number;
-  windows: Array<{ start: string; end: string }>;
-}
+import type {
+  CreatePickupSlotDTO,
+  PickupSlotFilters,
+  SlotOrderBy,
+  ListPickupSlotsQuery,
+  Weekday,
+  GenerateSlotsFromWeekScheduleParams,
+  GenerateSlotsForDayParams as GenerateForDayParams, // alias to preserve existing name usage
+} from '../types/pickup-slot.js';
 
 /* -------------------------------------------------------------------------- */
 /* Allowed sort fields — must be a readonly array (NOT Set)                   */
@@ -107,10 +67,22 @@ const SLOT_ORDER_FIELDS = [
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Compare two HH:mm strings.
+ * @param a - Time string in `HH:mm` (or `HH:mm:ss`) format.
+ * @param b - Time string in `HH:mm` (or `HH:mm:ss`) format.
+ * @returns `true` if `a <= b` lexicographically (works for zero-padded times).
+ */
 function timeLessEq(a: string, b: string) {
   return a <= b; // strings in 'HH:mm' compare lexicographically fine
 }
 
+/**
+ * Add minutes to an `HH:mm` string (24h wrap-around).
+ * @param hhmm - Base time string in `HH:mm` format.
+ * @param minutes - Minutes to add (may exceed 60).
+ * @returns New time in `HH:mm` format (00:00–23:59), wrapped by 24h.
+ */
 function addMinutes(hhmm: string, minutes: number): string {
   const [hh, mm] = hhmm.split(':').map((n) => parseInt(n, 10));
   const total = hh * 60 + mm + minutes;
@@ -120,7 +92,11 @@ function addMinutes(hhmm: string, minutes: number): string {
   return `${pad(h2)}:${pad(m2)}`;
 }
 
-/** Build a Sequelize WHERE from filters. */
+/**
+ * Build a Sequelize `WHERE` clause from pickup-slot filters.
+ * @param filters - Optional filters (location IN, date ranges, specific dates, starts, capacity ranges).
+ * @returns A `WhereOptions` object suitable for `findAll`/`findAndCountAll`.
+ */
 function buildWhere(filters?: PickupSlotFilters): WhereOptions {
   const andParts: WhereOptions[] = [];
 
@@ -173,10 +149,17 @@ function buildWhere(filters?: PickupSlotFilters): WhereOptions {
 
 export class PickupSlotService {
   /**
-   * Create a single slot. Guards:
+   * Create a single slot.
+   *
+   * Guards:
    *  - Required fields
-   *  - startTime < endTime
-   *  - Duplicate (location+date+startTime+endTime) prevented
+   *  - `startTime < endTime` (strict)
+   *  - Duplicate (location+date+startTime+endTime) prevented by unique constraint
+   *
+   * @param input - Slot payload (location, date `YYYY-MM-DD`, start/end time `HH:mm`, capacity).
+   * @returns The created slot as a plain JSON object.
+   * @throws {BadRequestError} When required fields are missing or invalid.
+   * @throws {DuplicateError} When a slot with same natural key already exists.
    */
   static async create(input: CreatePickupSlotDTO) {
     const { location, date, startTime, endTime, capacity } = input;
@@ -215,21 +198,37 @@ export class PickupSlotService {
     }
   }
 
-  /** Fetch one slot by id (404 if missing). */
+  /**
+   * Fetch one slot by id.
+   * @param slotId - Primary key of the slot.
+   * @returns The slot as a plain JSON object.
+   * @throws {NotFoundError} If the slot does not exist.
+   */
   static async getById(slotId: string) {
     const row = await PickupSlotModel.findByPk(slotId);
     if (!row) throw new NotFoundError('Pickup slot not found');
     return row.toJSON();
   }
 
-  /** Delete one slot by id. Returns { deleted: boolean }. */
+  /**
+   * Delete a single slot by id.
+   * @param slotId - Primary key of the slot.
+   * @returns `{ deleted: true }` when a row was removed.
+   * @throws {NotFoundError} If the slot does not exist.
+   */
   static async remove(slotId: string) {
     const count = await PickupSlotModel.destroy({ where: { slotId } });
     if (!count) throw new NotFoundError('Pickup slot not found');
     return { deleted: true };
   }
 
-  /** Delete all slots for a (location, date). Returns { deleted: number }. */
+  /**
+   * Delete all slots for the given `location` and `date`.
+   * @param location - Location code/name.
+   * @param date - Date in `YYYY-MM-DD` format.
+   * @returns `{ deleted: number }` count of removed rows.
+   * @throws {BadRequestError} If params are missing/invalid.
+   */
   static async deleteByDay(location: string, date: string) {
     if (!location?.trim()) throw new BadRequestError('location is required');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -242,8 +241,14 @@ export class PickupSlotService {
   }
 
   /**
-   * Generate slots for ONE day from windows + interval (transactional).
-   * Skips duplicates; reports created/skipped.
+   * Generate slots for **one day** from time windows and a fixed interval.
+   *
+   * Each window `[start, end]` is split into adjacent slots of length `intervalMinutes`.
+   * Duplicates are skipped (reported in `skipped`).
+   *
+   * @param params - Generation input (location, date, interval, capacity, windows).
+   * @returns `{ created: Slot[], skipped: {startTime,endTime,reason}[] }`.
+   * @throws {BadRequestError} For invalid inputs.
    */
   static async generateForDay(params: GenerateForDayParams) {
     const { location, date, intervalMinutes, capacity, windows } = params;
@@ -324,7 +329,9 @@ export class PickupSlotService {
   }
 
   /**
-   * List slots with paging/sort.
+   * List slots with paging & sorting.
+   * @param query - Pagination and sort options.
+   * @returns `{ slots, total, page, pageSize, pages }`.
    */
   static async list(query: ListPickupSlotsQuery = {}) {
     const { page = 1, pageSize = 20, orderBy, orderDir } = query;
@@ -353,7 +360,9 @@ export class PickupSlotService {
   }
 
   /**
-   * Filter slots with paging/sort.
+   * Filter slots with paging & sorting.
+   * @param query - Filters plus pagination/sort options.
+   * @returns `{ slots, total, page, pageSize, pages }`.
    */
   static async filter(query: ListPickupSlotsQuery = {}) {
     const { page = 1, pageSize = 20, orderBy, orderDir, filters } = query;
@@ -384,7 +393,15 @@ export class PickupSlotService {
   }
 
   /**
-   * Generate slots for an entire month from a weekly schedule + interval.
+   * Generate slots for an entire **month** from a weekly schedule + interval.
+   *
+   * The weekly schedule is a map of weekday → [{ start, end }] windows.
+   * For each day in the target month, matching windows are expanded into fixed-length slots.
+   * Duplicate slots (by natural key) are skipped and reported.
+   *
+   * @param params - Location, month (`YYYY-MM`), interval, capacity, and weekly schedule.
+   * @returns `{ created: Slot[], skipped: {date,startTime,endTime,reason}[] }`.
+   * @throws {BadRequestError} For invalid inputs.
    */
   static async generateFromWeekScheduleForMonth(
     params: GenerateSlotsFromWeekScheduleParams

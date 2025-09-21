@@ -46,6 +46,29 @@ import { publicUrlToAbsPathIfLocal, tryUnlink } from '../utils/upload.js';
 export class ProductService {
   // ===== CRUD =====
 
+  /**
+   * Create a new product.
+   *
+   * Writes a single row in {@link ProductModel}. If `productCode` is present, it is
+   * expected to be unique. Any model-level normalizations (e.g., trimming/uppercasing)
+   * happen in model hooks.
+   *
+   * @param {CreateProductDTO} data - Input fields for a product.
+   * @returns {Promise<Record<string, any>>} The created product as a plain JSON object.
+   *
+   * @example
+   * await ProductService.create({
+   *   productId: 'EAN:123',
+   *   productCode: 'abc-123',
+   *   productName: 'Sparkling Water',
+   *   brands: 'Acme',
+   *   quantity: 6,
+   *   quantityUnit: 'bottles',
+   *   description: '6x500ml pack'
+   * });
+   *
+   * @throws {DuplicateError} When `productId` or `productCode` violates a unique constraint.
+   */
   static async create(data: CreateProductDTO) {
     return withTransaction(async (t: Transaction) => {
       try {
@@ -72,12 +95,29 @@ export class ProductService {
     });
   }
 
+  /**
+   * Get a single product by its primary key.
+   *
+   * @param {string} productId - Primary key of the product (e.g., EAN/UUID).
+   * @returns {Promise<Record<string, any>>} The product as a plain JSON object.
+   * @throws {NotFoundError} If no product is found.
+   */
   static async getById(productId: string) {
     const product = await ProductModel.findByPk(productId);
     if (!product) throw new NotFoundError('Product not found');
     return product.toJSON();
   }
 
+  /**
+   * Get a single product by its unique code.
+   *
+   * Trims and uppercases the provided code to align with potential model
+   * normalization hooks so lookups are stable.
+   *
+   * @param {string} productCode - Unique code to query by.
+   * @returns {Promise<Record<string, any>>} The product as a plain JSON object.
+   * @throws {NotFoundError} If no product is found for the given code.
+   */
   static async getByCode(productCode: string) {
     // Normalize like the model hook (trim + uppercase) to ensure match
     const code = productCode?.trim().toUpperCase();
@@ -88,6 +128,19 @@ export class ProductService {
     return product.toJSON();
   }
 
+  /**
+   * Update a product by ID.
+   *
+   * Only allows fields present in {@link UpdateProductDTO}. Uses a transaction
+   * and row-level lock to avoid write conflicts.
+   *
+   * @param {string} productId - Primary key of the product to update.
+   * @param {UpdateProductDTO} updates - Partial set of updatable fields.
+   * @returns {Promise<Record<string, any>>} The updated product as plain JSON.
+   *
+   * @throws {NotFoundError} If the product does not exist.
+   * @throws {DuplicateError} If `productCode` (or PK, if changed) collides with another row.
+   */
   static async update(productId: string, updates: UpdateProductDTO) {
     return withTransaction(async (t: Transaction) => {
       const product = await ProductModel.findByPk(productId, {
@@ -122,6 +175,22 @@ export class ProductService {
     });
   }
 
+  /**
+   * Delete a product (and its related images), then best-effort delete local files.
+   *
+   * Steps (inside a single transaction):
+   *  1) Lock the product row to ensure existence and avoid concurrent deletes.
+   *  2) Load related {@link ProductImageModel} rows and collect their URLs.
+   *  3) Delete image rows and the product row.
+   *
+   * After the transaction commits, any local files pointed to by image URLs
+   * are unlinked (best-effort; failures are logged but do not throw).
+   *
+   * @param {string} productId - Primary key of the product to delete.
+   * @returns {Promise<{ success: true }>} Success flag.
+   *
+   * @throws {NotFoundError} If the product does not exist.
+   */
   static async delete(productId: string) {
     // We'll collect URLs inside the TX, then delete files after commit
     const urlsToDelete: string[] = [];
@@ -170,13 +239,19 @@ export class ProductService {
   // ===== LIST & FILTER =====
 
   /**
-   * List products with optional free-text `q`.
+   * List products with optional free-text search and pagination.
    *
-   * Returns:
-   *  {
-   *    products: Array<Product>,
-   *    total, page, pageSize, pages
-   *  }
+   * The `q` parameter searches across `productId`, `productCode`, `productName`,
+   * and `brands` using SQL `LIKE` semantics (case sensitivity depends on collation).
+   *
+   * @param {ListProductsQuery} [query]
+   * @param {number} [query.page=1] - 1-based page index.
+   * @param {number} [query.pageSize=20] - Page size.
+   * @param {string} [query.q] - Free-text query.
+   * @param {'createdAt'|'updatedAt'|'productName'|'productCode'|'brands'} [query.orderBy='createdAt'] - Sort column.
+   * @param {'ASC'|'DESC'} [query.orderDir='DESC'] - Sort direction.
+   *
+   * @returns {Promise<{ products: Record<string, any>[]; total: number; page: number; pageSize: number; pages: number }>}
    */
   static async list(query: ListProductsQuery = {}) {
     const {
@@ -208,13 +283,20 @@ export class ProductService {
   }
 
   /**
-   * Filter products with structured filters + free-text `q`.
+   * Filter products using structured filters plus optional free-text `q`.
    *
-   * Returns:
-   *  {
-   *    products: Array<Product>,
-   *    total, page, pageSize, pages
-   *  }
+   * See {@link ProductFilters} for all supported fields. Range filters are inclusive.
+   * Quantity range ignores NULL quantities.
+   *
+   * @param {ListProductsQuery} [query]
+   * @param {number} [query.page=1] - 1-based page index.
+   * @param {number} [query.pageSize=20] - Page size.
+   * @param {string} [query.q] - Free-text query across several fields.
+   * @param {ProductFilters} [query.filters] - Structured filters (ids, codes, names, ranges).
+   * @param {'createdAt'|'updatedAt'|'productName'|'productCode'|'brands'} [query.orderBy='createdAt'] - Sort column.
+   * @param {'ASC'|'DESC'} [query.orderDir='DESC'] - Sort direction.
+   *
+   * @returns {Promise<{ products: Record<string, any>[]; total: number; page: number; pageSize: number; pages: number }>}
    */
   static async filter(query: ListProductsQuery = {}) {
     const {
@@ -248,6 +330,15 @@ export class ProductService {
 
   // ===== PRIVATE SEARCH HELPERS =====
 
+  /**
+   * Build a SQL LIKE/ILIKE pattern from a value and match mode.
+   * Case sensitivity depends on DB collation.
+   *
+   * @private
+   * @param {string} value - Raw string to patternize.
+   * @param {StringMatch} mode - 'exact' | 'startsWith' | 'endsWith' | 'like'.
+   * @returns {string} A pattern suitable for Sequelize LIKE operator.
+   */
   private static patternFor(value: string, mode: StringMatch) {
     switch (mode) {
       case 'exact':
@@ -262,6 +353,15 @@ export class ProductService {
     }
   }
 
+  /**
+   * Create a WHERE fragment for a single string field using a value or array of values.
+   *
+   * @private
+   * @param {string} field - Column/attribute name.
+   * @param {string|string[]} value - One or many values to match.
+   * @param {StringMatch} mode - Matching mode.
+   * @returns {WhereOptions} Sequelize where fragment.
+   */
   private static stringFieldCondition(
     field: string,
     value: string | string[],
@@ -279,6 +379,15 @@ export class ProductService {
     return { [field]: { [Op.like]: this.patternFor(value, mode) } };
   }
 
+  /**
+   * Build a composite WHERE clause for products using free-text `q`
+   * and structured filters.
+   *
+   * @private
+   * @param {string|undefined} q - Free-text query applied across common fields.
+   * @param {ProductFilters|undefined} filters - Structured field filters.
+   * @returns {WhereOptions} Combined Sequelize where clause (possibly empty object).
+   */
   private static buildProductWhere(
     q?: string,
     filters?: ProductFilters

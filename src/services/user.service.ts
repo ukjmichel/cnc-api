@@ -397,6 +397,48 @@ export class UserService {
       return { success: true };
     });
   }
+
+  /**
+   * Assign a role to a user via AuthorizationModel.
+   * Returns the user with `authorization: { role }`.
+   *
+   * @param {string} userId
+   * @param {'user'|'employee'|'administrator'} role
+   * @returns {Promise<ApiUser>}
+   * @throws {NotFoundError} if user not found
+   */
+  static async setRole(
+    userId: string,
+    role: 'user' | 'employee' | 'administrator'
+  ): Promise<ApiUser> {
+    return withTransaction(async (t) => {
+      const user = await UserModel.findByPk(userId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (!user) throw new NotFoundError('User not found');
+
+      const existing = await AuthorizationModel.findOne({
+        where: { userId },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      if (existing) {
+        existing.role = role as any;
+        await existing.save({ transaction: t });
+      } else {
+        await AuthorizationModel.create(
+          { userId, role: role as any },
+          { transaction: t }
+        );
+      }
+
+      // Serialize + attach authorization role in the response
+      const api = serializeUser(user.toJSON());
+      return { ...api, authorization: { role } } as ApiUser;
+    });
+  }
 }
 
 export const userService = UserService;

@@ -1,11 +1,12 @@
 // src/services/stock.service.ts
+
 /**
  * =============================================================================
  * StockService — Business logic for inventory lots & movements
  * =============================================================================
  * Notes
- *  - ⛔ Does NOT create/commit transactions; pass a Sequelize Transaction in.
- *  - ⚖️ Never deletes a lot when it reaches 0; it is kept with quantity = 0.
+ *  - Does NOT create/commit transactions; pass a Sequelize Transaction in.
+ *  - Never deletes a lot when it reaches 0; it is kept with quantity = 0.
  *  - For inbound adjustments with unitPrice, updates lot.unitPrice via simple MA.
  * =============================================================================
  */
@@ -31,13 +32,24 @@ import type {
 
 type ISODate = string; // YYYY-MM-DD
 
+/**
+ * Natural-key for a stock lot.
+ * A "lot" is identified by productId + location + (optional) zone + (optional) expirationDate.
+ */
 export interface LotKey {
+  /** Product primary key */
   productId: string;
+  /** Physical/virtual location identifier (warehouse, store, bin, etc.) */
   location: string;
+  /** Optional sub-location/zone (e.g., aisle/shelf/bin code) */
   zone?: string | null;
+  /** Optional expiration date (YYYY-MM-DD) */
   expirationDate?: ISODate | null;
 }
 
+/**
+ * Input for a quantity adjustment against a lot.
+ */
 export interface AdjustInput extends LotKey {
   /** positive => IN, negative => OUT */
   quantityDelta: number;
@@ -55,6 +67,9 @@ export interface AdjustInput extends LotKey {
   performedAt?: Date;
 }
 
+/**
+ * Input for a stock transfer between two lots (same or different location/zone/expiry).
+ */
 export interface TransferInput {
   /** source lot */
   from: LotKey;
@@ -62,7 +77,7 @@ export interface TransferInput {
   to: LotKey;
   /** qty to transfer (must be > 0) */
   quantity: number;
-  /** optional unitPrice to snapshot onto both movements and set on destination */
+  /** optional unitPrice to snapshot onto both movements and set on destination (MA) */
   unitPrice?: number | null;
   /** reference string for both movements */
   reference?: string | null;
@@ -74,12 +89,23 @@ export interface TransferInput {
   performedAt?: Date;
 }
 
+/**
+ * Service encapsulating stock-lot and movement operations.
+ * @remarks
+ * - Callers must manage transactions for atomicity.
+ * - Quantities are never allowed to persist < 0 unless `allowNegative` is set.
+ */
 export class StockService {
   /* ------------------------------------------------------------------------ */
   /* Lot helpers                                                              */
   /* ------------------------------------------------------------------------ */
 
-  /** Find a lot by natural key (no create). */
+  /**
+   * Find an existing lot by its natural key (does not create).
+   * @param key Natural-key fields of the lot.
+   * @param t Optional transaction.
+   * @returns The lot instance or `null` if not found.
+   */
   static async findLot(key: LotKey, t?: Transaction) {
     const lot = await StockModel.findOne({
       where: {
@@ -93,7 +119,13 @@ export class StockService {
     return lot;
   }
 
-  /** Create a new lot. Throws if product doesn't exist. */
+  /**
+   * Create a new empty lot (quantity=0, unitPrice=null).
+   * @param key Natural-key fields of the lot.
+   * @param t Optional transaction.
+   * @throws NotFoundError If the product does not exist.
+   * @returns The newly created lot instance.
+   */
   static async createLot(key: LotKey, t?: Transaction) {
     const product = await ProductModel.findByPk(key.productId, {
       transaction: t,
@@ -123,7 +155,12 @@ export class StockService {
     }
   }
 
-  /** Find or create a lot (locked FOR UPDATE when inside a transaction). */
+  /**
+   * Get a lot by natural key, creating it if missing, then lock FOR UPDATE.
+   * @param key Natural-key fields of the lot.
+   * @param t Required transaction.
+   * @returns The locked lot instance.
+   */
   static async getOrCreateLot(key: LotKey, t: Transaction) {
     let lot = await this.findLot(key, t);
     if (!lot) {
@@ -139,8 +176,14 @@ export class StockService {
 
   /**
    * Adjust quantity on a lot and write a movement.
-   * Positive delta => IN; Negative => OUT.
+   *
+   * Positive delta ⇒ **IN**; Negative ⇒ **OUT**.
    * Keeps the lot even when quantity reaches 0.
+   *
+   * @param input Adjustment payload (lot key + quantity delta + options).
+   * @param t Transaction (required).
+   * @throws BadRequestError On invalid input or insufficient stock (without allowNegative).
+   * @returns Object with the updated lot (JSON) and finalQty.
    */
   static async adjust(input: AdjustInput, t: Transaction) {
     const {
@@ -227,8 +270,17 @@ export class StockService {
 
   /**
    * Transfer quantity between two lots (atomic in caller TX).
-   * Creates 'transfer_out' from source and 'transfer_in' to destination.
+   *
+   * Creates:
+   *  - `transfer_out` from source
+   *  - `transfer_in` to destination
+   *
    * Keeps source lot even if it reaches 0.
+   *
+   * @param input Transfer payload (from/to lot keys + quantity + options).
+   * @param t Transaction (required).
+   * @throws BadRequestError If quantity ≤ 0 or insufficient source stock (without allowNegative).
+   * @returns From/to results with finalQty and lot snapshots.
    */
   static async transfer(input: TransferInput, t: Transaction) {
     const {
@@ -338,13 +390,21 @@ export class StockService {
   /* Queries                                                                  */
   /* ------------------------------------------------------------------------ */
 
-  /** Get on-hand for a lot. */
+  /**
+   * Get on-hand quantity for a lot (0 if lot does not exist).
+   * @param key Lot natural key.
+   * @returns On-hand quantity as a number.
+   */
   static async getOnHand(key: LotKey) {
     const lot = await this.findLot(key);
     return lot ? Number(lot.quantity) : 0;
   }
 
-  /** Simple listing of lots by filters. */
+  /**
+   * List lots matching simple filters (no pagination).
+   * @param filters Filter bag; supports exact matches and `productIds` array.
+   * @returns Array of plain lot objects (toJSON()) ordered by productId/location/zone/expirationDate.
+   */
   static async listLots(
     filters: Partial<LotKey & { productIds: string[] }> = {}
   ) {
@@ -373,7 +433,11 @@ export class StockService {
   /* List & Filter (q + sort + pagination)                                    */
   /* ------------------------------------------------------------------------ */
 
-  /** List with q + sort + pagination. */
+  /**
+   * Paginated list of lots with optional free-text `q`.
+   * @param query Pagination/sort and optional `q`.
+   * @returns Lots + pagination meta.
+   */
   static async list(query: ListStocksQuery = {}) {
     const {
       page = 1,
@@ -402,7 +466,11 @@ export class StockService {
     };
   }
 
-  /** Filter with structured filters + q + sort + pagination. */
+  /**
+   * Paginated filter across structured fields + optional free-text `q`.
+   * @param query Pagination/sort + filters bag.
+   * @returns Lots + pagination meta.
+   */
   static async filter(query: ListStocksQuery = {}) {
     const {
       page = 1,
@@ -436,7 +504,13 @@ export class StockService {
   /* Rebuild (scoped; requires a TX)                                          */
   /* ------------------------------------------------------------------------ */
 
-  /** Recompute a single lot's quantity from movements (keeps lot even at 0). */
+  /**
+   * Recompute a single lot's quantity from movements.
+   * Keeps the lot even at 0.
+   * @param key Lot natural key.
+   * @param t Transaction (required).
+   * @returns The updated lot (JSON) and number of movements considered.
+   */
   static async rebuildLotFromMovements(key: LotKey, t: Transaction) {
     const lot = await this.getOrCreateLot(
       {
@@ -470,6 +544,7 @@ export class StockService {
   /* Private where helpers                                                    */
   /* ------------------------------------------------------------------------ */
 
+  /** Build LIKE/ILIKE pattern for string-match. */
   private static patternFor(value: string, mode: StringMatch) {
     switch (mode) {
       case 'exact':
@@ -484,6 +559,11 @@ export class StockService {
     }
   }
 
+  /**
+   * Where fragment for a single (possibly nullable) string field, supporting:
+   *  - value: string | (string|null)[]
+   *  - null-aware OR composition
+   */
   private static stringFieldCondition(
     field: string,
     value: string | (string | null)[],
@@ -511,6 +591,7 @@ export class StockService {
     return pieces.length === 1 ? pieces[0] : { [Op.or]: pieces };
   }
 
+  /** Numeric range helper; returns undefined if both ends are missing. */
   private static numericRangeCondition(
     field: string,
     from?: number,
@@ -522,6 +603,12 @@ export class StockService {
     return Object.keys(cond).length ? { [field]: cond } : undefined;
   }
 
+  /**
+   * Build composite WHERE clause for lots using free-text `q` and structured filters.
+   * @param q Free-text query across productId, location, zone.
+   * @param filters Structured filters (ids, location/zone, expiry, numeric ranges, dates).
+   * @returns Sequelize where clause.
+   */
   private static buildWhere(q?: string, filters?: StockFilters): WhereOptions {
     const andParts: WhereOptions[] = [];
 

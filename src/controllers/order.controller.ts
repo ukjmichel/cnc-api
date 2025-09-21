@@ -51,8 +51,18 @@ import { toInt } from '../utils/query.js';
  * ==========================================================================*/
 
 /**
- * Build ListOrdersQuery from generic req.query (admin/general endpoints).
- * Supports: userId, status (csv), pickupSlotId (string or 'null'), dateFrom, dateTo.
+ * Build a {@link ListOrdersQuery} object from `req.query` for admin/general endpoints.
+ *
+ * Supported query params:
+ *  - `userId` (string)
+ *  - `status` (comma-separated list or single value)
+ *  - `pickupSlotId` (string or literal `"null"` to mean unassigned)
+ *  - `dateFrom`, `dateTo` (ISO date strings)
+ *  - `page`, `pageSize` (numbers)
+ *  - `orderBy`, `orderDir` (see types)
+ *
+ * @param qs - Raw query object (typically `req.query`).
+ * @returns Normalized {@link ListOrdersQuery}.
  */
 function buildListQuery(qs: Record<string, unknown>): ListOrdersQuery {
   const {
@@ -103,8 +113,18 @@ function buildListQuery(qs: Record<string, unknown>): ListOrdersQuery {
 }
 
 /**
- * Build ListOrdersQuery without userId (we will inject req.user.userId for “self”).
- * Supports: status (csv), pickupSlotId ('null' allowed), dateFrom, dateTo.
+ * Build a {@link ListOrdersQuery} for self-scoped endpoints (the `userId`
+ * will be injected from `req.user` by the caller).
+ *
+ * Supported query params:
+ *  - `status` (comma-separated list or single value)
+ *  - `pickupSlotId` (string or `"null"`)
+ *  - `dateFrom`, `dateTo`
+ *  - `page`, `pageSize`
+ *  - `orderBy`, `orderDir`
+ *
+ * @param qs - Raw query params (e.g., `req.query`).
+ * @returns A query object with `filters` (without `userId`).
  */
 function buildSelfListQuery(qs: Record<string, unknown>): Omit<
   ListOrdersQuery,
@@ -161,9 +181,12 @@ export class OrderController {
 
   /**
    * Create a new order.
+   *
    * @route POST /api/orders
-   * @body CreateOrderDTO
-   * @returns 201 { data: { order } }
+   * @param req - Express request with {@link CreateOrderDTO} in `body`.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `201 Created` with `{ data: { order } }`.
    */
   static async create(req: Request, res: Response, next: NextFunction) {
     try {
@@ -177,9 +200,12 @@ export class OrderController {
 
   /**
    * List orders with filters + pagination.
+   *
    * @route GET /api/orders
-   * @query see buildListQuery
-   * @returns 200 { data: { orders }, meta }
+   * @param req - Express request (uses query params parsed by {@link buildListQuery}).
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { orders }, meta }`.
    */
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
@@ -200,9 +226,13 @@ export class OrderController {
   }
 
   /**
-   * Alias of list().
+   * Alias of {@link list}.
+   *
    * @route GET /api/orders/filter
-   * @returns 200 { data: { orders }, meta }
+   * @param req - Express request.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { orders }, meta }`.
    */
   static async filter(req: Request, res: Response, next: NextFunction) {
     try {
@@ -223,11 +253,17 @@ export class OrderController {
   }
 
   /**
-   * Fetch one order by id and enrich with items + stock details.
+   * Fetch one order by id and enrich with items + minimal stock details.
+   *
    * - Removes redundant `orderId` from each item in the response.
-   * - Embeds `stock` for each item but omits `stock.stockId` (already present on item).
+   * - Embeds `productId` and `expirationDate` for each item's stock.
+   *
    * @route GET /api/orders/:orderId
-   * @returns 200 { data: { order } }
+   * @param req - Express request with `orderId` path param.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { order } }`.
+   * @throws NotFoundError if the order is missing.
    */
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
@@ -303,9 +339,12 @@ export class OrderController {
 
   /**
    * Update totals (decimal strings).
+   *
    * @route PATCH /api/orders/:orderId/totals
-   * @body { subtotal: string, taxTotal: string, grandTotal: string }
-   * @returns 200 { data: { order } }
+   * @param req - Express request with `orderId` param and {@link UpdateTotalsDTO} body.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { order } }`.
    */
   static async updateTotals(req: Request, res: Response, next: NextFunction) {
     try {
@@ -331,8 +370,12 @@ export class OrderController {
 
   /**
    * Update contact fields (contactName/Phone/notes).
+   *
    * @route PATCH /api/orders/:orderId/contact
-   * @returns 200 { data: { order } }
+   * @param req - Express request with `orderId` param and {@link UpdateContactDTO} body.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { order } }`.
    */
   static async updateContact(req: Request, res: Response, next: NextFunction) {
     try {
@@ -347,9 +390,12 @@ export class OrderController {
 
   /**
    * Change order status with slot-capacity sync.
+   *
    * @route PATCH /api/orders/:orderId/status
-   * @body { status: OrderStatus }
-   * @returns 200 { data: { order } }
+   * @param req - Express request with `orderId` param and `{ status }` body.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { order } }`.
    */
   static async changeStatus(req: Request, res: Response, next: NextFunction) {
     try {
@@ -367,11 +413,15 @@ export class OrderController {
 
   /**
    * Assign/switch/unassign pickup slot.
+   *
    * - Provide a UUID to assign/change
-   * - Provide null to unassign (and release reservation if needed)
+   * - Provide `null` to unassign (and release reservation if needed)
+   *
    * @route PATCH /api/orders/:orderId/pickup-slot
-   * @body { pickupSlotId: string | null }
-   * @returns 200 { data: { order } }
+   * @param req - Express request with `orderId` param and `{ pickupSlotId }` body.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { order } }`.
    */
   static async setPickupSlot(req: Request, res: Response, next: NextFunction) {
     try {
@@ -391,8 +441,12 @@ export class OrderController {
 
   /**
    * Remove an order (releases reservation if needed).
+   *
    * @route DELETE /api/orders/:orderId
-   * @returns 200 { data: { deleted: true } }
+   * @param req - Express request with `orderId` param.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { deleted: true } }`.
    */
   static async remove(req: Request, res: Response, next: NextFunction) {
     try {
@@ -408,9 +462,13 @@ export class OrderController {
 
   /**
    * List only the authenticated user's orders.
+   *
    * @route GET /api/orders/self
    * @auth required
-   * @returns 200 { data: { orders }, meta }
+   * @param req - Authenticated request (expects `req.user.userId`).
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { orders }, meta }`.
    */
   static async listSelf(
     req: AuthenticatedRequest,
@@ -440,11 +498,17 @@ export class OrderController {
 
   /**
    * Get one self-scoped order by id, enriched with items + stock details.
+   *
    * - Ensures the order belongs to the authenticated user.
    * - Removes redundant `orderId` per item and `stockId` inside embedded `stock`.
+   *
    * @route GET /api/orders/self/:orderId
    * @auth required
-   * @returns 200 { data: { order } }
+   * @param req - Authenticated request with `orderId` path param.
+   * @param res - Express response.
+   * @param next - Error forwarding callback.
+   * @returns `200 OK` with `{ data: { order } }`.
+   * @throws NotFoundError if the order does not exist or is not owned by the user.
    */
   static async getSelfById(
     req: AuthenticatedRequest,

@@ -65,7 +65,12 @@ interface TransferInput {
   performedAt?: Date;
 }
 
-/** Normalize & coerce query string into LotKey (for GET on-hand). */
+/**
+ * Normalize & coerce query string into a {@link LotKey}.
+ *
+ * @param {Request['query']} q - Express query object
+ * @returns {LotKey} Normalized lot key (empty strings coerced to `null` where appropriate)
+ */
 function readLotKeyFromQuery(q: Request['query']): LotKey {
   const productId = String(q.productId ?? '').trim();
   const location = String(q.location ?? '').trim();
@@ -83,7 +88,12 @@ function readLotKeyFromQuery(q: Request['query']): LotKey {
   return { productId, location, zone, expirationDate };
 }
 
-/** Basic validation for required LotKey fields. */
+/**
+ * Assert required fields of a {@link LotKey}.
+ *
+ * @param {LotKey} k - The lot key to validate
+ * @throws {BadRequestError} If required fields are missing
+ */
 function assertLotKey(k: LotKey) {
   if (!k.productId) throw new BadRequestError('productId is required');
   if (!k.location) throw new BadRequestError('location is required');
@@ -95,10 +105,14 @@ export class StockController {
   /* ======================================================================== */
 
   /**
-   * POST /api/stocks/adjust
-   * Body: AdjustInput
-   * Returns: { data: { lot, finalQty, movement } }
-   *  - lot: latest lot snapshot (never deleted even if quantity hits 0)
+   * Adjust lot quantity and write a movement (positive = IN, negative = OUT).
+   *
+   * @route POST /api/stocks/adjust
+   * @param {Request} req - Express request (body: {@link AdjustInput})
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { lot, finalQty } }`
+   * @throws {BadRequestError} If body is invalid or stock would go negative (unless allowed)
    */
   static async adjust(req: Request, res: Response, next: NextFunction) {
     try {
@@ -119,14 +133,14 @@ export class StockController {
   }
 
   /**
-   * POST /api/stocks/transfer
-   * Body: TransferInput
-   * Returns: {
-   *   data: {
-   *     from: { finalQty, lot, movement },
-   *     to:   { finalQty, lot, movement }
-   *   }
-   * }
+   * Transfer quantity between two lots atomically (OUT from source + IN to dest).
+   *
+   * @route POST /api/stocks/transfer
+   * @param {Request} req - Express request (body: {@link TransferInput})
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { from: { finalQty, lot }, to: { finalQty, lot } } }`
+   * @throws {BadRequestError} If body is invalid or source lacks stock (unless allowNegative)
    */
   static async transfer(req: Request, res: Response, next: NextFunction) {
     try {
@@ -157,8 +171,13 @@ export class StockController {
   /* ======================================================================== */
 
   /**
-   * GET /api/stocks/on-hand?productId=&location=&zone=&expirationDate=
-   * Returns: { data: { onHand } }
+   * Get on-hand quantity for a lot.
+   *
+   * @route GET /api/stocks/on-hand
+   * @param {Request} req - Express request (query: `productId`, `location`, `zone?`, `expirationDate?`)
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { onHand } }`
    */
   static async getOnHand(req: Request, res: Response, next: NextFunction) {
     try {
@@ -173,9 +192,13 @@ export class StockController {
   }
 
   /**
-   * GET /api/stocks
-   * q + sort + pagination
-   * Returns: { data: { lots }, meta }
+   * Paginated list of lots with optional free-text `q`.
+   *
+   * @route GET /api/stocks
+   * @param {Request} req - Express request (query built by {@link buildStockListQuery})
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { lots }, meta }`
    */
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
@@ -197,9 +220,13 @@ export class StockController {
   }
 
   /**
-   * GET /api/stocks/filter
-   * Advanced filters + q + sort + pagination
-   * Returns: { data: { lots }, meta }
+   * Advanced filtering + q + sort + pagination.
+   *
+   * @route GET /api/stocks/filter
+   * @param {Request} req - Express request (query built by {@link buildStockFilterQuery})
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { lots }, meta }`
    */
   static async filter(req: Request, res: Response, next: NextFunction) {
     try {
@@ -221,8 +248,14 @@ export class StockController {
   }
 
   /**
-   * GET /api/stocks/lots-of-product?productId=...
-   * Returns all existing lots for a given product (no pagination).
+   * Return all existing lots for a given product (no pagination).
+   *
+   * @route GET /api/stocks/lots-of-product
+   * @param {Request} req - Express request (query: `productId`)
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { lots }, meta }`
+   * @throws {BadRequestError} If `productId` is missing
    */
   static async lotsOfProduct(req: Request, res: Response, next: NextFunction) {
     try {
@@ -242,8 +275,13 @@ export class StockController {
   }
 
   /**
-   * GET /api/stocks (legacy-style simple list with manual pagination)
-   * NOTE: You can keep this for simple list-by-filters use-cases, but prefer /filter.
+   * Legacy-style simple list with manual pagination (prefer `/filter` for new uses).
+   *
+   * @route GET /api/stocks (legacy)
+   * @param {Request} req - Express request (query: `productId`, `productIds`, `location`, `zone`, `expirationDate`, `page`, `pageSize`)
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { lots }, meta }`
    */
   static async listSimple(req: Request, res: Response, next: NextFunction) {
     try {
@@ -290,9 +328,14 @@ export class StockController {
   }
 
   /**
-   * POST /api/stocks/rebuild
-   * Body: { productId, location, zone?, expirationDate? }
-   * Recomputes lot quantity from movements (scoped).
+   * Recompute a single lot's quantity from movements (scoped).
+   *
+   * @route POST /api/stocks/rebuild
+   * @param {Request} req - Express request (body: {@link LotKey})
+   * @param {Response} res - Express response
+   * @param {NextFunction} next - Error handler
+   * @returns {Promise<void>} 200 OK with `{ data: { lot, movements } }`
+   * @throws {BadRequestError} If required fields are missing
    */
   static async rebuild(req: Request, res: Response, next: NextFunction) {
     try {

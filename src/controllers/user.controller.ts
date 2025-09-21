@@ -12,28 +12,31 @@
  * Important:
  *  - We **do not** expose a top-level `role` on users.
  *  - Instead, every user has: `authorization: { role: "user"|"employee"|"administrator" } | null`
- *  - Creation still writes `role` on the UserModel; the controller strips it from responses.
+ *  - Creation writes to AuthorizationModel (default `"user"` or `"employee"`); the controller
+ *    returns it under `authorization.role`.
  *
  * Role handling
- *  - Accepts query param: ?role=user|employee|administrator (DB-side filter via query builders/service).
+ *  - Accepts query params: `?authRole=` (canonical) or `?role=` (alias) which the query builders
+ *    translate into DB-side filters via AuthorizationModel.
  *
  * Endpoints
- *  - POST   /api/users                   → create (role = "user" by default, TX)
- *  - POST   /api/users/employee          → create with role = "employee" (TX)
- *  - GET    /api/users                   → list (q + sort + pagination; ?role= filter)
- *  - GET    /api/users/filter            → filter (advanced filters + q; ?role= filter)
+ *  - POST   /api/users                   → create (authorization role = "user" by default, TX)
+ *  - POST   /api/users/employee          → create with authorization role = "employee" (TX)
+ *  - GET    /api/users                   → list (q + sort + pagination; DB-side role filter)
+ *  - GET    /api/users/filter            → filter (advanced filters + q; DB-side role filter)
  *  - GET    /api/users/by-email          → getByEmail (?email=)
  *  - GET    /api/users/by-username       → getByUsername (?username=)
  *  - GET    /api/users/:id               → getById
  *  - PATCH  /api/users/:id               → update (profile fields, no password)
  *  - PATCH  /api/users/:id/password      → changePassword
  *  - PATCH  /api/users/:id/verified      → setVerified
- *  - DELETE /api/users/:id               → delete
+ *  - PATCH  /api/users/:id/role          → setRole (AuthorizationModel)
+ *  - DELETE /api/users/:id               → delete (and cleanup AuthorizationModel)
  *
  * Notes
  *  - Business logic lives in UserService; this controller only wraps/normalizes responses.
- *  - Transactions for create endpoints keep behavior consistent with service layer.
- *  - Query builders moved to src/queries/user.queries.ts
+ *  - Transactions for create endpoints keep behavior consistent with the service layer.
+ *  - Query builders live in src/queries/user.queries.ts.
  * =============================================================================
  */
 
@@ -43,6 +46,7 @@ import { Transaction } from 'sequelize';
 import { UserService } from '../services/user.service.js';
 import { sequelize } from '../db/sequelize.js';
 import { UserModel } from '../models/user.model.js';
+import { AuthorizationModel } from '../models/authorization.model.js';
 
 import type {
   CreateUserDTO,
@@ -63,17 +67,14 @@ export class UserController {
   // ========= CREATE (TX) =========
 
   /**
-   * Create a new user with the default role `"user"`.
+   * Create a new user with the default authorization role `"user"`.
    *
    * @route POST /api/users
    * @auth Public (or guarded upstream)
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   *
-   * @body {CreateUserDTO} req.body
-   * @returns {Promise<void>} 201 Created — `{ data: { user } }`
+   * @param req Express request (body: {@link CreateUserDTO})
+   * @param res Express response
+   * @param next Error handler
+   * @returns 201 Created — `{ data: { user } }`
    *
    * @example
    * // Request body
@@ -95,6 +96,7 @@ export class UserController {
 
     try {
       const result = await sequelize.transaction(async (t: Transaction) => {
+        // Create base user
         const user = await UserModel.create(
           {
             username: payload.username,
@@ -102,11 +104,19 @@ export class UserController {
             lastName: payload.lastName,
             email: payload.email,
             password: payload.password,
-            role: 'user',
           } as any,
           { transaction: t }
         );
-        return user.toJSON();
+
+        // Create default authorization: role = "user"
+        const role: 'user' = 'user';
+        await AuthorizationModel.create(
+          { userId: user.userId, role },
+          { transaction: t }
+        );
+
+        // Return user with `authorization` inline (controller will normalize)
+        return { ...user.toJSON(), authorization: { role } };
       });
 
       return res
@@ -118,17 +128,14 @@ export class UserController {
   }
 
   /**
-   * Create a new employee with role `"employee"`.
+   * Create a new employee with authorization role `"employee"`.
    *
    * @route POST /api/users/employee
    * @auth Admin-only (enforced by middleware)
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   *
-   * @body {CreateUserDTO} req.body
-   * @returns {Promise<void>} 201 Created — `{ data: { user } }`
+   * @param req Express request (body: {@link CreateUserDTO})
+   * @param res Express response
+   * @param next Error handler
+   * @returns 201 Created — `{ data: { user } }`
    *
    * @errors
    * - 400 Validation error
@@ -148,11 +155,18 @@ export class UserController {
             lastName: payload.lastName,
             email: payload.email,
             password: payload.password,
-            role: 'employee',
           } as any,
           { transaction: t }
         );
-        return user.toJSON();
+
+        // Create authorization: role = "employee"
+        const role: 'employee' = 'employee';
+        await AuthorizationModel.create(
+          { userId: user.userId, role },
+          { transaction: t }
+        );
+
+        return { ...user.toJSON(), authorization: { role } };
       });
 
       return res
@@ -170,12 +184,10 @@ export class UserController {
    *
    * @route GET /api/users/:id
    * @auth Protected (middleware)
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @pathParam {string} req.params.id - User ID.
-   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   * @param req Express request (path: `id`)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { user } }`
    *
    * @errors
    * - 404 Not Found
@@ -194,12 +206,10 @@ export class UserController {
    * Get a user by email.
    *
    * @route GET /api/users/by-email?email={email}
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @query {string} email - Email address.
-   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   * @param req Express request (query: `email`)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { user } }`
    *
    * @errors
    * - 400 Missing/invalid email
@@ -220,12 +230,10 @@ export class UserController {
    * Get a user by username.
    *
    * @route GET /api/users/by-username?username={username}
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @query {string} username - Username.
-   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   * @param req Express request (query: `username`)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { user } }`
    *
    * @errors
    * - 400 Missing/invalid username
@@ -244,21 +252,13 @@ export class UserController {
 
   /**
    * List users with pagination and optional free-text query.
-   * A role filter can be applied via `?role=user|employee|administrator` (DB-side).
+   * Role filtering is **DB-side** via `?authRole=` (canonical) or `?role=` (alias).
    *
    * @route GET /api/users
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   *
-   * @query {string} [q] - Free-text search.
-   * @query {string} [sort] - Sort string (e.g., "createdAt:desc").
-   * @query {number} [page=1] - Page number.
-   * @query {number} [pageSize=20] - Page size.
-   * @query {"user"|"employee"|"administrator"} [role] - DB-side filter.
-   *
-   * @returns {Promise<void>} 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
+   * @param req Express request (query: q, page, pageSize, sort, authRole/role)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
    *
    * @errors
    * - 400 Invalid query
@@ -288,15 +288,13 @@ export class UserController {
 
   /**
    * Advanced filter endpoint (server-side structured filters + `q`).
-   * Supports the same DB-side role filter as `list`.
+   * Supports the same DB-side role filter as `list` (`?authRole=` / `?role=`).
    *
    * @route GET /api/users/filter
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   *
-   * @returns {Promise<void>} 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
+   * @param req Express request (query: filters JSON or individual fields)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { users }, meta: { total, page, pageSize, pages } }`
    *
    * @errors
    * - 400 Invalid filters
@@ -307,7 +305,6 @@ export class UserController {
       const query = buildUserFilterQuery(req.query as Record<string, unknown>);
       const result = await UserService.filter(query);
 
-      // Users are already filtered/paginated at the DB layer.
       const normalized = serializeUsers(result.users as any[]);
 
       return res.json({
@@ -330,13 +327,10 @@ export class UserController {
    * Update profile fields (no password change).
    *
    * @route PATCH /api/users/:id
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @pathParam {string} req.params.id - User ID.
-   * @body {UpdateUserDTO} req.body
-   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   * @param req Express request (path: `id`, body: {@link UpdateUserDTO})
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { user } }`
    *
    * @errors
    * - 400 Validation error
@@ -360,13 +354,10 @@ export class UserController {
    * Change a user's password.
    *
    * @route PATCH /api/users/:id/password
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @pathParam {string} req.params.id - User ID.
-   * @body {ChangePasswordDTO} req.body
-   * @returns {Promise<void>} 200 OK — `{ data: { success: true } }`
+   * @param req Express request (path: `id`, body: {@link ChangePasswordDTO})
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { success: true } }`
    *
    * @errors
    * - 400 Validation error or weak password
@@ -390,13 +381,10 @@ export class UserController {
    * Set a user's verification status.
    *
    * @route PATCH /api/users/:id/verified
-   *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @pathParam {string} req.params.id - User ID.
-   * @body {{ verified: boolean }} req.body
-   * @returns {Promise<void>} 200 OK — `{ data: { user } }`
+   * @param req Express request (path: `id`, body: `{ verified: boolean }`)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { user } }`
    *
    * @errors
    * - 400 Invalid body
@@ -418,15 +406,17 @@ export class UserController {
   }
 
   /**
-   * Delete a user.
+   * Delete a user and cleanup their authorization.
    *
    * @route DELETE /api/users/:id
+   * @param req Express request (path: `id`)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { success: true } }`
    *
-   * @param {Request} req - Express request.
-   * @param {Response} res - Express response.
-   * @param {NextFunction} next - Error handler.
-   * @pathParam {string} req.params.id - User ID.
-   * @returns {Promise<void>} 200 OK — `{ data: { success: true } }`
+   * @remarks
+   * - Calls service to delete the user row.
+   * - Then removes AuthorizationModel rows referencing the userId (best-effort cleanup).
    *
    * @errors
    * - 403 Forbidden
@@ -436,7 +426,41 @@ export class UserController {
   static async remove(req: Request, res: Response, next: NextFunction) {
     try {
       const out = await UserService.delete(req.params.id);
+      // Best-effort cleanup of authorization (outside service per your request to keep service unchanged)
+      await AuthorizationModel.destroy({ where: { userId: req.params.id } });
       return res.json({ data: out });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Set a user's role (AuthorizationModel).
+   *
+   * @route PATCH /api/users/:id/role
+   * @auth Employee/Admin (middleware)
+   * @param req Express request (path: `id`, body: `{ role: "user"|"employee"|"administrator" }`)
+   * @param res Express response
+   * @param next Error handler
+   * @returns 200 OK — `{ data: { user } }` with `authorization: { role }`
+   *
+   * @errors
+   * - 400 Invalid body
+   * - 403 Forbidden
+   * - 404 Not Found
+   * - 500 Internal error
+   */
+  static async setRole(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { role } = req.body as {
+        role: 'user' | 'employee' | 'administrator';
+      };
+      if (!role || !['user', 'employee', 'administrator'].includes(role)) {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
+
+      const user = await UserService.setRole(req.params.id, role);
+      return res.json({ data: { user } });
     } catch (err) {
       return next(err);
     }

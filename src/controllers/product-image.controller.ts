@@ -65,6 +65,14 @@ import {
 /* -------------------------------------------------------------------------- */
 /* Helper: parse & validate ?variant=                                         */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Parse a `variant` value from a querystring and validate it against
+ * the allowed {@link PRODUCT_IMAGE_VARIANTS}.
+ *
+ * @param {unknown} v - Raw query value (e.g. req.query.variant).
+ * @returns {ProductImageVariant | undefined} A valid variant or `undefined` if invalid/missing.
+ */
 function qsVariant(v: unknown): ProductImageVariant | undefined {
   if (typeof v !== 'string') return undefined;
   const s = v.toLowerCase() as ProductImageVariant;
@@ -76,6 +84,14 @@ function qsVariant(v: unknown): ProductImageVariant | undefined {
 /* -------------------------------------------------------------------------- */
 /* Helper: safely rename file on disk; if target exists append timestamp      */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Rename a file on disk, avoiding collisions by appending a timestamp when needed.
+ *
+ * @param {string} srcAbs - Absolute source path.
+ * @param {string} dstAbs - Absolute destination path.
+ * @returns {Promise<string>} Final absolute path (destination or timestamp-suffixed).
+ */
 async function safeRename(srcAbs: string, dstAbs: string): Promise<string> {
   if (srcAbs === dstAbs) return dstAbs;
   try {
@@ -92,15 +108,25 @@ async function safeRename(srcAbs: string, dstAbs: string): Promise<string> {
   }
 }
 
+/**
+ * Controller for product image endpoints.
+ * Each method handles HTTP concerns and delegates business logic to the service layer.
+ */
 export class ProductImageController {
   /* ======================================================================== */
   /* CREATE (JSON)                                                            */
   /* ======================================================================== */
 
   /**
-   * POST /api/product-images
-   * Create an image row directly from JSON body (no file upload here).
-   * Body: CreateProductImageDTO { productId, variant, url, alt? }
+   * Create an image row directly from JSON (no file upload).
+   *
+   * @route POST /api/product-images
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request (body: {@link CreateProductImageDTO}).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 201 Created — `{ data: { image } }`
+   * @errors 400|404|409|500
    */
   static async create(req: Request, res: Response, next: NextFunction) {
     try {
@@ -119,9 +145,9 @@ export class ProductImageController {
   /* ======================================================================== */
 
   /**
-   * POST /api/product-images/upload
+   * Create an image by uploading a file (multipart/form-data).
    *
-   * Use with Multer middleware (e.g., singleProductImage('image')) on the route.
+   * Use with Multer middleware (e.g., `singleProductImage('image')`) on the route.
    * Expects multipart/form-data with fields:
    *  - productId (string, required)
    *  - variant (string, required — must be in PRODUCT_IMAGE_VARIANTS)
@@ -129,10 +155,18 @@ export class ProductImageController {
    *  - file field name e.g. "image" (required)
    *
    * Behavior:
-   *  - Renames the stored file to: productId_variant.<ext>
-   *  - Builds a public URL relative to UPLOADS_MOUNT
+   *  - Renames the stored file to: `productId_variant.<ext>`
+   *  - Builds a public URL relative to `UPLOADS_MOUNT`
    *  - Creates the DB row via ProductImageService
    *  - If DB write fails, deletes the just-saved file
+   *
+   * @route POST /api/product-images/upload
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request with `file` from Multer.
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 201 Created — `{ data: { image } }`
+   * @errors 400|404|409|500
    */
   static async createWithUpload(
     req: Request,
@@ -176,7 +210,6 @@ export class ProductImageController {
       }
 
       // Prepare destination & filenames:
-      // Multer's disk storage gives destination + filename (random or original)
       const destAbs =
         (file as any).destination || path.dirname((file as any).path || '');
       const currentAbs = path.resolve(destAbs, file.filename);
@@ -228,8 +261,15 @@ export class ProductImageController {
   /* ======================================================================== */
 
   /**
-   * PUT /api/product-images/upsert
-   * Create or update by natural key { productId, variant } using JSON body.
+   * Create or update by natural key `{ productId, variant }` using JSON body.
+   *
+   * @route PUT /api/product-images/upsert
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request (body: {@link CreateProductImageDTO}).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { image } }`
+   * @errors 400|404|409|500
    */
   static async upsertVariant(req: Request, res: Response, next: NextFunction) {
     try {
@@ -245,7 +285,16 @@ export class ProductImageController {
   /* READS                                                                    */
   /* ======================================================================== */
 
-  /** GET /api/product-images/:id — fetch by imageId */
+  /**
+   * Fetch a single image by its ID.
+   *
+   * @route GET /api/product-images/:id
+   * @param {Request} req - Express request (path: `id`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { image } }`
+   * @errors 404|500
+   */
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
       const image = await ProductImageService.getById(req.params.id);
@@ -256,8 +305,14 @@ export class ProductImageController {
   }
 
   /**
-   * GET /api/product-images/by-product?productId=...&variant=...
    * Fetch an image by (productId, variant).
+   *
+   * @route GET /api/product-images/by-product?productId=...&variant=...
+   * @param {Request} req - Express request (query: `productId`, `variant`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { image } }`
+   * @errors 400|404|500
    */
   static async getByProductAndVariant(
     req: Request,
@@ -292,8 +347,14 @@ export class ProductImageController {
   }
 
   /**
-   * GET /api/product-images
    * Paginated list with optional free-text `q`.
+   *
+   * @route GET /api/product-images
+   * @param {Request} req - Express request (query built by `buildProductImageListQuery`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { images }, meta }`
+   * @errors 400|500
    */
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
@@ -317,8 +378,14 @@ export class ProductImageController {
   }
 
   /**
-   * GET /api/product-images/filter
    * Advanced filters + optional free-text `q`.
+   *
+   * @route GET /api/product-images/filter
+   * @param {Request} req - Express request (query built by `buildProductImageFilterQuery`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { images }, meta }`
+   * @errors 400|500
    */
   static async filter(req: Request, res: Response, next: NextFunction) {
     try {
@@ -346,9 +413,16 @@ export class ProductImageController {
   /* ======================================================================== */
 
   /**
-   * PATCH /api/product-images/:id
    * Update fields on a product image (e.g., alt, url, variant).
    * Note: Changing variant could hit unique (productId, variant) constraint.
+   *
+   * @route PATCH /api/product-images/:id
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request (path: `id`, body: {@link UpdateProductImageDTO}).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { image } }`
+   * @errors 400|404|409|500
    */
   static async update(req: Request, res: Response, next: NextFunction) {
     try {
@@ -363,9 +437,16 @@ export class ProductImageController {
   }
 
   /**
-   * DELETE /api/product-images/:id
-   * Deletes the DB row and, if the URL is served by *this* API (under UPLOADS_MOUNT),
-   * also deletes the file on disk (best-effort, no throw).
+   * Delete an image by ID. If the image URL points to a local file served
+   * by this API, the file is also removed (best effort).
+   *
+   * @route DELETE /api/product-images/:id
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request (path: `id`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { success: true } }`
+   * @errors 404|500
    */
   static async remove(req: Request, res: Response, next: NextFunction) {
     try {
@@ -385,8 +466,16 @@ export class ProductImageController {
   }
 
   /**
-   * DELETE /api/product-images/by-product?productId=...&variant=...
-   * Deletes by (productId, variant) and also cleans local file if hosted here.
+   * Delete a single image by `(productId, variant)`. If the URL is local,
+   * the corresponding file is also deleted (best effort).
+   *
+   * @route DELETE /api/product-images/by-product?productId=...&variant=...
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request (query: `productId`, `variant`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { success: true } }`
+   * @errors 400|404|500
    */
   static async deleteByProductAndVariant(
     req: Request,
@@ -432,8 +521,16 @@ export class ProductImageController {
   }
 
   /**
-   * DELETE /api/product-images/by-product/:productId
-   * Deletes all images for a product and also removes local files (best-effort).
+   * Delete **all** images for a product. If any URLs are local, attempt
+   * to delete the files as well (best effort).
+   *
+   * @route DELETE /api/product-images/by-product/:productId
+   * @auth Employee/Admin (typical)
+   * @param {Request} req - Express request (path: `productId`).
+   * @param {Response} res - Express response.
+   * @param {NextFunction} next - Express error handler.
+   * @returns {Promise<void>} 200 OK — `{ data: { success: true, deleted: number } }`
+   * @errors 400|404|500
    */
   static async deleteAllByProduct(
     req: Request,
