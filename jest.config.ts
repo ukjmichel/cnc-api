@@ -4,6 +4,11 @@ const config: Config = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.(spec|test).ts?(x)'],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/dist/',
+    '/src/__tests__/helpers/',
+  ],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'mjs', 'cjs'],
   transform: {
     '^.+\\.tsx?$': [

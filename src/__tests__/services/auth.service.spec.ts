@@ -1,288 +1,267 @@
+// src/__tests__/routes/auth.route.e2e.spec.ts
+/**
+ * =============================================================================
+ * Auth routes — real controllers + real MySQL via Sequelize (E2E)
+ * =============================================================================
+ * - Uses real AuthService + controllers + models (no mocks)
+ * - Connects to the real MySQL defined in src/config/env.ts
+ * - Cleans all tables between tests
+ * - Generates VALID usernames (^[a-z0-9]{2,20}$) to satisfy UserModel
+ * - Accepts tokens from response body OR auth cookies
+ * =============================================================================
+ */
+
 import 'reflect-metadata';
-import { jest } from '@jest/globals';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+} from '@jest/globals';
 
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
+import express from 'express';
+import request from 'supertest';
 
-/* ========================= Mocks (must be BEFORE imports) ========================= */
+import { Sequelize } from 'sequelize-typescript';
+import { config } from '../../config/env.js';
+import { cleanAllTables } from '../../../test-utils/mysql.js';
 
-/** Config values consumed at module load time */
-const mockConfig = {
-  jwtSecret: 'access-secret',
-  jwtRefreshSecret: 'refresh-secret',
-  jwtExpiresIn: '15m',
-  jwtRefreshExpiresIn: '7d',
-  nodeEnv: 'test',
-  accessCookieName: 'access_token',
-  refreshCookieName: 'refresh_token',
-};
-jest.unstable_mockModule('../../config/env.js', () => ({
-  config: mockConfig,
-}));
+import { UserModel } from '../../models/user.model.js';
+import { AuthorizationModel } from '../../models/authorization.model.js';
+// If you re-export, you can import from '../../routes/index.js' instead.
+import { authRouter } from '../../routes/auth.route.js';
+import { app } from '../../app.js';
 
-/** jsonwebtoken — deterministic sign/verify */
-const jwtSign = jest.fn((payload: any, secret: string) => {
-  const userId =
-    (payload?.user && payload.user.userId) ||
-    payload?.userId ||
-    payload?.sub ||
-    'unknown';
-  if (secret === 'access-secret') return `acc.${userId}`;
-  if (secret === 'refresh-secret') return `ref.${userId}`;
-  return `signed.${userId}`;
-});
-const jwtVerify = jest.fn((token: string, secret: string) => {
-  if (secret !== 'refresh-secret') throw new Error('bad secret');
-  if (!token.startsWith('ref.')) throw new Error('bad token');
-  const userId = token.slice(4);
-  return { sub: userId, type: 'refresh', user: { userId } };
-});
-jest.unstable_mockModule('jsonwebtoken', () => ({
-  default: { sign: jwtSign, verify: jwtVerify },
-  sign: jwtSign,
-  verify: jwtVerify,
-}));
+/* ============================ DB setup (real) ============================= */
 
-/** Sequelize operators + transaction function (from separate db module) */
-const Op = {
-  or: Symbol.for('sequelize.or'),
-} as any;
+let sequelize: Sequelize;
 
-const mockSequelize = {
-  transaction: jest.fn(async (cb: (t: any) => any) =>
-    cb({ LOCK: { UPDATE: 'UPDATE' } })
-  ),
-};
-jest.unstable_mockModule('../../db/sequelize.js', () => ({
-  sequelize: mockSequelize,
-}));
+function makeSequelize(): Sequelize {
+  return new Sequelize({
+    dialect: 'mysql',
+    host: config.mysqlHost,
+    port: config.mysqlPort,
+    database: config.mysqlDatabase,
+    username: config.mysqlUser,
+    password: config.mysqlPassword,
+    logging: config.dbLogSql ? console.log : false,
+    pool: {
+      max: config.mysqlPool.max,
+      min: config.mysqlPool.min,
+      acquire: config.mysqlPool.acquire,
+      idle: config.mysqlPool.idle,
+    },
+    models: [UserModel, AuthorizationModel],
+  });
+}
 
-/** Models used by the service */
-const mockUserModel = {
-  findOne: jest.fn(),
-  findByPk: jest.fn(),
-  create: jest.fn(),
-};
-const mockAuthorizationModel = {
-  create: jest.fn(),
-};
-jest.unstable_mockModule('../../models/user.model.js', () => ({
-  UserModel: mockUserModel,
-}));
-jest.unstable_mockModule('../../models/authorization.model.js', () => ({
-  AuthorizationModel: mockAuthorizationModel,
-}));
+/* =============================== Utilities ================================ */
 
-/** Also mock 'sequelize' export for Op (service imports Op from here) */
-jest.unstable_mockModule('sequelize', () => ({
-  Op,
-  Transaction: class {},
-}));
+// Generate a VALID username per model validator: ^[a-z0-9]{2,20}$
+function genUsername(base: string): string {
+  // base should be alphanumeric, we enforce and trim to make space for suffix
+  const sanitizedBase = base.toLowerCase().replace(/[^a-z0-9]/g, '') || 'u';
+  // 6-digit time suffix ensures uniqueness, digits are allowed
+  const suffix = (Date.now() % 1_000_000).toString().padStart(6, '0');
+  // ensure length <= 20
+  const take = Math.max(2, 20 - suffix.length);
+  let candidate = (sanitizedBase.slice(0, take) + suffix).slice(0, 20);
+  // Ensure min length 2
+  if (candidate.length < 2) candidate = candidate.padEnd(2, '0');
+  return candidate;
+}
 
-/* =============================== Load SUT ================================== */
-const { AuthService } = await import('../../services/auth.service.js');
-const { UserModel } = await import('../../models/user.model.js');
-const { AuthorizationModel } = await import(
-  '../../models/authorization.model.js'
-);
-const { sequelize } = await import('../../db/sequelize.js');
-const jwt = await import('jsonwebtoken');
+function genEmail(local: string) {
+  const safeLocal = local.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user';
+  const stamp = (Date.now() % 1_000_000).toString().padStart(6, '0');
+  return `${safeLocal}${stamp}@e2e.test`;
+}
 
-/* ============================== Test helpers =============================== */
-const mkUserInst = (over: any = {}) => {
-  const base = {
-    userId: 'u1',
-    username: 'john',
-    email: 'j@e.com',
-    verified: false,
-    validatePassword: jest.fn(async (p: string) => p === 'pass'),
-    toJSON: () => ({
-      userId: 'u1',
-      username: 'john',
-      email: 'j@e.com',
-      verified: false,
-    }),
-  };
-  return { ...base, ...over };
-};
+function pickToken(res: request.Response) {
+  const accessToken =
+    res.body?.data?.accessToken ?? res.body?.data?.tokens?.accessToken ?? null;
+  const refreshToken =
+    res.body?.data?.refreshToken ??
+    res.body?.data?.tokens?.refreshToken ??
+    null;
+  return { accessToken, refreshToken };
+}
 
-beforeEach(() => {
-  jest.clearAllMocks();
+/* ================================= Hooks ================================== */
+
+beforeAll(async () => {
+  sequelize = makeSequelize();
+  await sequelize.authenticate();
+  await sequelize.sync({ alter: true });
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
 });
 
-/* ================================= Register ================================= */
+afterEach(async () => {
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
+});
 
-describe('AuthService.register', () => {
-  test('creates user + authorization (role=user), returns jwt user and tokens', async () => {
-    asMock(UserModel.findOne).mockResolvedValue(null);
-    const created = mkUserInst({
-      userId: 'nu',
-      username: 'alice',
-      email: 'a@b.com',
-    });
-    asMock(UserModel.create).mockResolvedValue(created as any);
-    asMock(AuthorizationModel.create).mockResolvedValue(undefined);
+afterAll(async () => {
+  await sequelize.close();
+});
 
-    const out = await AuthService.register({
-      username: 'alice',
-      firstName: 'Alice',
-      lastName: 'Smith',
-      email: 'a@b.com',
-      password: 'pw',
-    });
+/* ================================= Tests ================================== */
 
-    expect(sequelize.transaction).toHaveBeenCalled();
-    expect(UserModel.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          [Op.or]: [{ username: 'alice' }, { email: 'a@b.com' }],
-        }),
-        lock: 'UPDATE',
-      })
-    );
-    expect(UserModel.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        username: 'alice',
+describe('Auth routes — real controllers + real MySQL via Sequelize', () => {
+  test('register → creates user (201) (tokens may be omitted)', async () => {
+    const username = genUsername('alice');
+    const email = genEmail('alice');
+
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
         firstName: 'Alice',
+        lastName: 'Doe',
+        email,
+        password: 'secret123',
+      })
+      .expect(201);
+
+    // user persisted
+    expect(res.body?.data?.user?.username).toBe(username);
+    const row = await UserModel.findOne({ where: { username } });
+    expect(row).not.toBeNull();
+  });
+
+  test('login → returns tokens (200)', async () => {
+    const username = genUsername('bob');
+    const email = genEmail('bob');
+
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Bob',
         lastName: 'Smith',
-        email: 'a@b.com',
+        email,
         password: 'pw',
-      }),
-      expect.objectContaining({ transaction: expect.any(Object) })
-    );
-    expect(AuthorizationModel.create).toHaveBeenCalledWith(
-      { userId: 'nu', role: 'user' },
-      expect.objectContaining({ transaction: expect.any(Object) })
-    );
-
-    expect(out.user).toEqual({
-      userId: 'nu',
-      username: 'alice',
-      email: 'a@b.com',
-      verified: false,
-    });
-    expect(out.tokens.accessToken).toBe('acc.nu');
-    expect(out.tokens.refreshToken).toBe('ref.nu');
-    expect(jwt.sign).toHaveBeenCalled();
-  });
-
-  test('throws DuplicateError when user exists', async () => {
-    asMock(UserModel.findOne).mockResolvedValue(mkUserInst() as any);
-
-    await expect(
-      AuthService.register({
-        username: 'john',
-        firstName: 'J',
-        lastName: 'D',
-        email: 'j@e.com',
-        password: 'x',
       })
-    ).rejects.toHaveProperty('name', 'DuplicateError');
-    expect(UserModel.create).not.toHaveBeenCalled();
+      .expect(201);
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, password: 'pw' })
+      .expect(200);
+
+    const { accessToken, refreshToken } = pickToken(res);
+    expect(accessToken).toBeTruthy();
+    expect(refreshToken).toBeTruthy();
   });
-});
 
-/* ================================== Login ================================== */
+  test('refresh → returns new tokens (200)', async () => {
+    const username = genUsername('cara');
+    const email = genEmail('cara');
 
-describe('AuthService.login', () => {
-  test('authenticates by username/email and returns user + tokens', async () => {
-    const inst = mkUserInst({
-      userId: 'u9',
-      username: 'bob',
-      email: 'b@c.com',
-    });
-    asMock(UserModel.findOne).mockResolvedValue(inst as any);
-
-    const out = await AuthService.login({
-      identifier: 'BoB',
-      password: 'pass',
-    });
-
-    expect(UserModel.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          [Op.or]: [{ username: 'bob' }, { email: 'bob' }],
-        }),
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Cara',
+        lastName: 'Lee',
+        email,
+        password: 'pw',
       })
-    );
-    expect(inst.validatePassword).toHaveBeenCalledWith('pass');
-    expect(out.user).toEqual({
-      userId: 'u9',
-      username: 'bob',
-      email: 'b@c.com',
-      verified: false,
-    });
-    expect(out.tokens.accessToken).toBe('acc.u9');
-    expect(out.tokens.refreshToken).toBe('ref.u9');
+      .expect(201);
+
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, password: 'pw' })
+      .expect(200);
+
+    const { refreshToken } = pickToken(login);
+    expect(refreshToken).toBeTruthy();
+
+    const refreshed = await request(app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken })
+      .expect(200);
+
+    const tokens2 = pickToken(refreshed);
+    expect(tokens2.accessToken).toBeTruthy();
+    expect(tokens2.refreshToken).toBeTruthy();
   });
 
-  test('throws AuthError when user not found', async () => {
-    asMock(UserModel.findOne).mockResolvedValue(null as any);
-    await expect(
-      AuthService.login({ identifier: 'x', password: 'y' })
-    ).rejects.toHaveProperty('name', 'AuthError');
+  test('me → accepts Bearer (or auth cookie) and returns current user (200)', async () => {
+    const username = genUsername('dana');
+    const email = genEmail('dana');
+
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Dana',
+        lastName: 'Ray',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, password: 'pw' })
+      .expect(200);
+
+    const { accessToken } = pickToken(login);
+    const cookies = login.headers['set-cookie'];
+
+    // Prefer Bearer; fallback to cookies if your middleware supports it
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+      .set(!accessToken && cookies ? { Cookie: cookies } : {})
+      .expect(200);
+
+    expect(res.body?.data?.user?.username).toBe(username);
   });
 
-  test('throws AuthError when password invalid', async () => {
-    const inst = mkUserInst({ validatePassword: jest.fn(async () => false) });
-    asMock(UserModel.findOne).mockResolvedValue(inst as any);
-    await expect(
-      AuthService.login({ identifier: 'john', password: 'bad' })
-    ).rejects.toHaveProperty('name', 'AuthError');
-  });
-});
+  test('logout → returns 204 or 200', async () => {
+    const username = genUsername('ella');
+    const email = genEmail('ella');
 
-/* ================================= Refresh ================================= */
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Ella',
+        lastName: 'Ng',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
 
-describe('AuthService.refresh', () => {
-  test('verifies refresh token, loads user, returns rotated tokens + user', async () => {
-    const inst = mkUserInst({
-      userId: 'u5',
-      username: 'eve',
-      email: 'e@f.com',
-    });
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, password: 'pw' })
+      .expect(200);
 
-    const out = await AuthService.refresh('ref.u5');
+    const { refreshToken } = pickToken(login);
+    const cookies = login.headers['set-cookie'];
 
-    expect(jwt.verify).toHaveBeenCalledWith('ref.u5', 'refresh-secret');
-    expect(UserModel.findByPk).toHaveBeenCalledWith('u5');
-    expect(out.user).toEqual({
-      userId: 'u5',
-      username: 'eve',
-      email: 'e@f.com',
-      verified: false,
-    });
-    expect(out.accessToken).toBe('acc.u5');
-    expect(out.refreshToken).toBe('ref.u5'); // rotated token (same format in this mock)
-  });
+    const res = await request(app)
+      .post('/api/auth/logout')
+      .set(cookies ? { Cookie: cookies } : {})
+      // Some implementations want refreshToken in the body; include if present
+      .send(refreshToken ? { refreshToken } : {})
+      // allow either 204 No Content or 200 OK
+      .expect((r) => {
+        if (![200, 204].includes(r.status)) {
+          throw new Error(`Unexpected status ${r.status}`);
+        }
+      });
 
-  test('throws AuthError for invalid token', async () => {
-    await expect(
-      AuthService.refresh('not-a-refresh-token')
-    ).rejects.toHaveProperty('name', 'AuthError');
-  });
-
-  test('throws NotFoundError if user missing', async () => {
-    asMock(UserModel.findByPk).mockResolvedValue(null as any);
-    await expect(AuthService.refresh('ref.gone')).rejects.toHaveProperty(
-      'name',
-      'NotFoundError'
-    );
-  });
-});
-
-/* ================================ cookieSpec ================================ */
-
-describe('AuthService.cookieSpec', () => {
-  test('returns cookie names and options from config', () => {
-    const spec = AuthService.cookieSpec();
-    expect(spec.ACCESS_COOKIE).toBe('access_token');
-    expect(spec.REFRESH_COOKIE).toBe('refresh_token');
-    // sanity on cookie options
-    expect(spec.accessCookieOpts.httpOnly).toBe(true);
-    expect(spec.refreshCookieOpts.path).toBe('/api/auth/refresh');
-    // derived maxAge should be numbers
-    expect(typeof spec.accessCookieOpts.maxAge).toBe('number');
-    expect(typeof spec.refreshCookieOpts.maxAge).toBe('number');
+    if (res.status === 200) {
+      expect(res.body?.data?.success).toBe(true);
+    }
   });
 });

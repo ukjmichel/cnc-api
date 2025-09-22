@@ -1,264 +1,376 @@
+/**
+ * E2E — User routes with the REAL app + REAL MySQL (no route/controller mocks)
+ * - Spins up the actual Express app (imported from ../../app.js)
+ * - Uses /api/auth to log in as an admin user
+ * - Sends Bearer auth on every request to /api/users/*
+ * - Creates unique, model-valid usernames inline (^[a-z0-9]{2,20}$)
+ */
+
 import 'reflect-metadata';
-import { jest } from '@jest/globals';
-
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
-
-/* ========================= Mocks (before imports) ========================= */
-
-// Middlewares: pass-through but record calls
-const requireAuth = jest.fn((req: any, _res: any, next: any) => next());
-const requireEmployeeOrAdmin = jest.fn((req: any, _res: any, next: any) =>
-  next()
-);
-const requireAdmin = jest.fn((req: any, _res: any, next: any) => next());
-
-jest.unstable_mockModule('../../middlewares/requireAuth.js', () => ({
-  requireAuth,
-}));
-jest.unstable_mockModule('../../middlewares/requireRole.js', () => ({
-  requireEmployeeOrAdmin,
-  requireAdmin,
-}));
-
-// Controllers: annotate params so `res` is not `unknown`
-const ctrl = {
-  create: jest.fn(async (_req: any, res: any) =>
-    res
-      .status(201)
-      .json({
-        data: { user: { userId: 'new', authorization: { role: 'user' } } },
-      })
-  ),
-  createEmployee: jest.fn(async (_req: any, res: any) =>
-    res
-      .status(201)
-      .json({
-        data: { user: { userId: 'emp', authorization: { role: 'employee' } } },
-      })
-  ),
-  list: jest.fn(async (_req: any, res: any) =>
-    res.json({
-      data: { users: [{ userId: 'u1' }] },
-      meta: { total: 1, page: 1, pageSize: 20, pages: 1 },
-    })
-  ),
-  filter: jest.fn(async (_req: any, res: any) =>
-    res.json({
-      data: { users: [{ userId: 'f1' }] },
-      meta: { total: 1, page: 1, pageSize: 20, pages: 1 },
-    })
-  ),
-  getByEmail: jest.fn(async (req: any, res: any) =>
-    res.json({
-      data: { user: { userId: 'e1', email: String(req.query.email || '') } },
-    })
-  ),
-  getByUsername: jest.fn(async (req: any, res: any) =>
-    res.json({
-      data: {
-        user: { userId: 'n1', username: String(req.query.username || '') },
-      },
-    })
-  ),
-  getById: jest.fn(async (req: any, res: any) =>
-    res.json({ data: { user: { userId: String(req.params.id) } } })
-  ),
-  update: jest.fn(async (req: any, res: any) =>
-    res.json({
-      data: { user: { userId: String(req.params.id), ...(req.body || {}) } },
-    })
-  ),
-  changePassword: jest.fn(async (_req: any, res: any) =>
-    res.json({ data: { success: true } })
-  ),
-  setVerified: jest.fn(async (req: any, res: any) =>
-    res.json({
-      data: {
-        user: {
-          userId: String(req.params.id),
-          verified: Boolean(req.body?.verified),
-        },
-      },
-    })
-  ),
-  remove: jest.fn(async (_req: any, res: any) =>
-    res.json({ data: { success: true } })
-  ),
-  setRole: jest.fn(async (req: any, res: any) =>
-    res.json({
-      data: {
-        user: {
-          userId: String(req.params.id),
-          authorization: { role: req.body?.role },
-        },
-      },
-    })
-  ),
-};
-
-jest.unstable_mockModule('../../controllers/user.controller.js', () => ({
-  UserController: ctrl,
-}));
-
-/* ========================= Load SUT after mocks ========================= */
-import express from 'express';
+import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
 import request from 'supertest';
+import { sequelize } from '../../db/sequelize.js';
+import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { UserModel } from '../../models/user.model.js';
+import { AuthorizationModel } from '../../models/authorization.model.js';
+import { app } from '../../app.js';
 
-const { userRouter } = await import('../../routes/user.route');
+/* ----------------------------- helpers ----------------------------- */
 
-/* ============================= Test server ============================== */
-const makeApp = () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/users', userRouter);
-  app.use((_req, res) => res.status(404).json({ error: 'not found' }));
-  return app;
-};
+// Parse Set-Cookie header into a map
+function parseSetCookie(setCookie: string[] | undefined) {
+  const out: Record<string, string> = {};
+  if (!setCookie) return out;
+  for (const c of setCookie) {
+    const [kv] = c.split(';');
+    const [k, v] = kv.split('=');
+    out[k.trim()] = (v ?? '').trim();
+  }
+  return out;
+}
 
-let app: express.Express;
+// Pull access/refresh tokens from body or cookies (our controllers set cookies)
+function pickToken(res: request.Response) {
+  const body = res.body ?? {};
+  const d = body.data ?? {};
+  const tokens = d.tokens ?? d;
 
-beforeEach(() => {
-  jest.clearAllMocks();
-  app = makeApp();
+  let accessToken: string | undefined =
+    tokens?.accessToken ?? tokens?.access_token ?? tokens?.at;
+  let refreshToken: string | undefined =
+    tokens?.refreshToken ?? tokens?.refresh_token ?? tokens?.rt;
+
+  if (!accessToken || !refreshToken) {
+    const v = (res.headers as unknown as Record<string, string | string[]>)[
+      'set-cookie'
+    ];
+    const cookies = Array.isArray(v)
+      ? v
+      : typeof v === 'string'
+      ? [v]
+      : undefined;
+    const parsed = parseSetCookie(cookies);
+    accessToken ||= parsed.accessToken ?? parsed.access_token ?? parsed.at;
+    refreshToken ||= parsed.refreshToken ?? parsed.refresh_token ?? parsed.rt;
+  }
+  return { accessToken, refreshToken };
+}
+
+// Make a model-valid username (lowercase a-z0-9, max 20)
+const mkUsername = (prefix: string) =>
+  (prefix.toLowerCase().replace(/[^a-z0-9]/g, '') || 'u').slice(0, 10) +
+  (Date.now() % 1_000_000).toString().padStart(6, '0');
+
+// Authorization header store for admin
+let adminBearer = '';
+let adminCookies: string[] | undefined;
+
+/* ------------------------------- setup ------------------------------- */
+
+beforeAll(async () => {
+  await sequelize.authenticate();
+  await sequelize.sync({ alter: true });
+
+  // Fresh DB
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
+
+  // Create an admin directly in DB
+  const admin = await UserModel.create({
+    username: mkUsername('admin'),
+    firstName: 'Admin',
+    lastName: 'User',
+    email: `admin${Date.now()}@e2e.test`,
+    password: 'pw', // hashed by model hook
+  });
+
+  await AuthorizationModel.create({
+    userId: admin.userId,
+    role: 'administrator',
+  });
+
+  // Login via real auth route to obtain cookies / bearer
+  const login = await request(app)
+    .post('/api/auth/login')
+    .send({ identifier: admin.username, password: 'pw' })
+    .expect(200);
+
+  const { accessToken } = pickToken(login);
+  adminBearer = accessToken ? `Bearer ${accessToken}` : '';
+
+  // normalize 'set-cookie' header -> string[]
+  const setCookieRaw = (
+    login.headers as unknown as Record<string, string | string[]>
+  )['set-cookie'];
+  adminCookies = Array.isArray(setCookieRaw)
+    ? setCookieRaw
+    : typeof setCookieRaw === 'string'
+    ? [setCookieRaw]
+    : undefined;
 });
 
-/* ================================ Tests ================================= */
+afterAll(async () => {
+  await sequelize.close();
+});
 
-describe('User routes — middleware & wiring', () => {
-  test('POST /api/users → create (requires auth + employeeOrAdmin)', async () => {
+/* -------------------------------- tests ------------------------------- */
+
+describe('User routes — real DB + real app', () => {
+  test('POST /api/users → create (201)', async () => {
+    const username = mkUsername('alice');
+    const email = `${username}@e2e.test`;
+
     const res = await request(app)
       .post('/api/users')
+      .set('Authorization', adminBearer)
       .send({
-        username: 'alice',
+        username,
         firstName: 'Alice',
         lastName: 'Smith',
-        email: 'a@b.com',
+        email,
         password: 'x',
       })
       .expect(201);
 
-    expect(requireAuth).toHaveBeenCalled();
-    expect(requireEmployeeOrAdmin).toHaveBeenCalled();
-    expect(ctrl.create).toHaveBeenCalled();
-    expect(res.body.data.user).toMatchObject({
-      userId: 'new',
-      authorization: { role: 'user' },
-    });
+    expect(res.body?.data?.user?.username).toBe(username);
+
+    const row = await UserModel.findOne({ where: { username } });
+    expect(row).not.toBeNull();
   });
 
-  test('POST /api/users/employee → createEmployee (requires auth + admin)', async () => {
+  test('POST /api/users/employee → creates employee (201)', async () => {
+    const username = mkUsername('bob');
+    const email = `${username}@e2e.test`;
+
     const res = await request(app)
       .post('/api/users/employee')
+      .set('Authorization', adminBearer)
       .send({
-        username: 'bob',
+        username,
         firstName: 'Bob',
         lastName: 'Brown',
-        email: 'b@c.com',
+        email,
         password: 'y',
       })
       .expect(201);
 
-    expect(requireAuth).toHaveBeenCalled();
-    expect(requireAdmin).toHaveBeenCalled();
-    expect(ctrl.createEmployee).toHaveBeenCalled();
-    expect(res.body.data.user.authorization).toEqual({ role: 'employee' });
+    const userId = res.body?.data?.user?.userId;
+    expect(userId).toBeTruthy();
+
+    const auth = await AuthorizationModel.findOne({ where: { userId } });
+    expect(auth?.role).toBe('employee');
   });
 
-  test('GET /api/users → list (requires auth + employeeOrAdmin)', async () => {
+  test('GET /api/users → list (200)', async () => {
     const res = await request(app)
-      .get('/api/users?q=john&page=2&pageSize=5&authRole=employee')
+      .get('/api/users?page=1&pageSize=5')
+      .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(requireAuth).toHaveBeenCalled();
-    expect(requireEmployeeOrAdmin).toHaveBeenCalled();
-    expect(ctrl.list).toHaveBeenCalled();
-    expect(res.body).toEqual({
-      data: { users: [{ userId: 'u1' }] },
-      meta: { total: 1, page: 1, pageSize: 20, pages: 1 },
-    });
+    expect(Array.isArray(res.body?.data?.users)).toBe(true);
+    expect(res.body?.meta).toBeTruthy();
   });
 
-  test('GET /api/users/filter → filter (requires auth + employeeOrAdmin)', async () => {
+  test('GET /api/users/by-email → find by email (200)', async () => {
+    const username = mkUsername('cara');
+    const email = `${username}@e2e.test`;
+    await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Cara',
+        lastName: 'Lee',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
     const res = await request(app)
-      .get('/api/users/filter?q=a&role=administrator')
+      .get(`/api/users/by-email?email=${encodeURIComponent(email)}`)
+      .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(requireAuth).toHaveBeenCalled();
-    expect(requireEmployeeOrAdmin).toHaveBeenCalled();
-    expect(ctrl.filter).toHaveBeenCalled();
-    expect(res.body.data.users[0].userId).toBe('f1');
+    expect(res.body?.data?.user?.email).toBe(email);
   });
 
-  test('GET /api/users/by-email → getByEmail', async () => {
+  test('GET /api/users/by-username → find by username (200)', async () => {
+    const username = mkUsername('dana');
+    const email = `${username}@e2e.test`;
+    await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Dana',
+        lastName: 'Ray',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
     const res = await request(app)
-      .get('/api/users/by-email?email=x@y.z')
+      .get(`/api/users/by-username?username=${encodeURIComponent(username)}`)
+      .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(requireAuth).toHaveBeenCalled();
-    expect(requireEmployeeOrAdmin).toHaveBeenCalled();
-    expect(ctrl.getByEmail).toHaveBeenCalled();
-    expect(res.body.data.user.email).toBe('x@y.z');
+    expect(res.body?.data?.user?.username).toBe(username);
   });
 
-  test('GET /api/users/by-username → getByUsername', async () => {
+  test('GET /api/users/:id → getById (200)', async () => {
+    const username = mkUsername('ella');
+    const email = `${username}@e2e.test`;
+    const created = await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Ella',
+        lastName: 'Ng',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const id = created.body?.data?.user?.userId;
     const res = await request(app)
-      .get('/api/users/by-username?username=alice')
+      .get(`/api/users/${id}`)
+      .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(ctrl.getByUsername).toHaveBeenCalled();
-    expect(res.body.data.user.username).toBe('alice');
+    expect(res.body?.data?.user?.userId).toBe(id);
   });
 
-  test('GET /api/users/:id → getById', async () => {
-    const res = await request(app).get('/api/users/u42').expect(200);
-    expect(ctrl.getById).toHaveBeenCalled();
-    expect(res.body.data.user.userId).toBe('u42');
-  });
+  test('PATCH /api/users/:id → update (200)', async () => {
+    const username = mkUsername('fred');
+    const email = `${username}@e2e.test`;
+    const created = await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Fred',
+        lastName: 'Zimmer', // >= 2 chars
+        email,
+        password: 'pw',
+      })
+      .expect(201);
 
-  test('PATCH /api/users/:id → update', async () => {
+    const id = created.body?.data?.user?.userId;
+
     const res = await request(app)
-      .patch('/api/users/u7')
-      .send({ username: 'new' })
+      .patch(`/api/users/${id}`)
+      .set('Authorization', adminBearer)
+      .send({ firstName: 'Freddie' })
       .expect(200);
 
-    expect(ctrl.update).toHaveBeenCalled();
-    expect(res.body.data.user).toMatchObject({ userId: 'u7', username: 'new' });
+    expect(res.body?.data?.user?.firstName).toBe('Freddie');
   });
 
-  test('PATCH /api/users/:id/password → changePassword', async () => {
+  test('PATCH /api/users/:id/password → changePassword (200)', async () => {
+    const username = mkUsername('gary');
+    const email = `${username}@e2e.test`;
+    const created = await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Gary',
+        lastName: 'Hughes', // >= 2 chars
+        email,
+        password: 'current',
+      })
+      .expect(201);
+
+    const id = created.body?.data?.user?.userId;
+
     const res = await request(app)
-      .patch('/api/users/u1/password')
-      .send({ currentPassword: 'a', newPassword: 'b' })
+      .patch(`/api/users/${id}/password`)
+      .set('Authorization', adminBearer)
+      .send({ currentPassword: 'current', newPassword: 'newpw' })
       .expect(200);
 
-    expect(ctrl.changePassword).toHaveBeenCalled();
-    expect(res.body.data).toEqual({ success: true });
+    expect(res.body?.data?.success).toBe(true);
   });
 
-  test('PATCH /api/users/:id/verified → setVerified', async () => {
+  test('PATCH /api/users/:id/verified → setVerified (200)', async () => {
+    const username = mkUsername('ivy');
+    const email = `${username}@e2e.test`;
+    const created = await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Ivy',
+        lastName: 'Quinn', // >= 2 chars
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const id = created.body?.data?.user?.userId;
+
     const res = await request(app)
-      .patch('/api/users/u1/verified')
+      .patch(`/api/users/${id}/verified`)
+      .set('Authorization', adminBearer)
       .send({ verified: true })
       .expect(200);
 
-    expect(ctrl.setVerified).toHaveBeenCalled();
-    expect(res.body.data.user).toMatchObject({ userId: 'u1', verified: true });
+    expect(res.body?.data?.user?.verified).toBe(true);
   });
 
-  test('DELETE /api/users/:id → remove', async () => {
-    const res = await request(app).delete('/api/users/u9').expect(200);
-    expect(ctrl.remove).toHaveBeenCalled();
-    expect(res.body.data).toEqual({ success: true });
-  });
+  test('PATCH /api/users/:id/role → setRole (200)', async () => {
+    const username = mkUsername('jade');
+    const email = `${username}@e2e.test`;
+    const created = await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Jade',
+        lastName: 'Kane', // >= 2 chars
+        email,
+        password: 'pw',
+      })
+      .expect(201);
 
-  test('PATCH /api/users/:id/role → setRole (requires admin)', async () => {
+    const id = created.body?.data?.user?.userId;
+
     const res = await request(app)
-      .patch('/api/users/u5/role')
+      .patch(`/api/users/${id}/role`)
+      .set('Authorization', adminBearer)
       .send({ role: 'employee' })
       .expect(200);
 
-    expect(requireAdmin).toHaveBeenCalled();
-    expect(ctrl.setRole).toHaveBeenCalled();
-    expect(res.body.data.user.authorization).toEqual({ role: 'employee' });
+    expect(res.body?.data?.user?.authorization?.role).toBe('employee');
+  });
+
+  test('DELETE /api/users/:id → remove (200)', async () => {
+    const username = mkUsername('kate');
+    const email = `${username}@e2e.test`;
+    const created = await request(app)
+      .post('/api/users')
+      .set('Authorization', adminBearer)
+      .send({
+        username,
+        firstName: 'Kate',
+        lastName: 'Reed', // >= 2 chars
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const id = created.body?.data?.user?.userId;
+
+    const res = await request(app)
+      .delete(`/api/users/${id}`)
+      .set('Authorization', adminBearer)
+      .expect(200);
+
+    expect(res.body?.data?.success).toBe(true);
+
+    const gone = await UserModel.findByPk(id);
+    expect(gone).toBeNull();
   });
 });

@@ -1,9 +1,10 @@
+// src/__tests__/models/authorization.model.spec.ts
 /**
  * =============================================================================
  * AuthorizationModel (MySQL) — integration-ish tests
  * =============================================================================
  * Reads DB connection info from your dynamic config (src/config/env.ts).
- * If the DB isn't reachable in CI/local, tests will skip gracefully.
+ * Assumes DB is reachable; fails fast if not.
  *
  * Covers:
  *  - create with default role
@@ -29,9 +30,9 @@ import { ValidationError, UniqueConstraintError } from 'sequelize';
 import { UserModel } from '../../models/user.model.js';
 import { AuthorizationModel } from '../../models/authorization.model.js';
 import { config } from '../../config/env.js';
+import { cleanAllTables } from '../../../test-utils/mysql.js';
 
 let sequelize: Sequelize;
-let canConnect = false;
 
 function makeSequelize(): Sequelize {
   return new Sequelize({
@@ -54,49 +55,32 @@ function makeSequelize(): Sequelize {
 
 beforeAll(async () => {
   sequelize = makeSequelize();
-  try {
-    await sequelize.authenticate();
-    canConnect = true;
-    await sequelize.sync({ force: true });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[AuthorizationModel MySQL tests] Skipping — cannot connect to MySQL:',
-      (err as Error).message
-    );
-  }
+
+  // Fail fast if DB is not reachable
+  await sequelize.authenticate();
+
+  // Ensure schema exists without dropping; keeps FKs & indexes intact
+  await sequelize.sync();
+
+  // Start from a known-empty state (FK-safe)
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
 });
 
 afterAll(async () => {
-  if (canConnect && sequelize) await sequelize.close();
+  if (sequelize) await sequelize.close();
 });
 
 afterEach(async () => {
-  if (!canConnect) return;
-  // Clear child table first (FK), then parent
-  await AuthorizationModel.destroy({
-    where: {},
-    truncate: true,
-    cascade: true,
+  // FK-safe cleanup between tests
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
   });
-  await UserModel.destroy({ where: {}, truncate: true, cascade: true });
 });
 
 describe('AuthorizationModel (MySQL)', () => {
-  const skipIfNoDB = () => {
-    if (!canConnect) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[AuthorizationModel tests] DB not reachable; skipping test.'
-      );
-      return true;
-    }
-    return false;
-  };
-
   test('creates with default role "user"', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'roleuser',
       firstName: 'Role',
@@ -112,8 +96,6 @@ describe('AuthorizationModel (MySQL)', () => {
   });
 
   test('rejects invalid role (enum validation)', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'badrole',
       firstName: 'Bad',
@@ -128,8 +110,6 @@ describe('AuthorizationModel (MySQL)', () => {
   });
 
   test('enforces uniqueness (one Authorization per userId)', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'uniq',
       firstName: 'Uniq',
@@ -152,8 +132,6 @@ describe('AuthorizationModel (MySQL)', () => {
   });
 
   test('CASCADE delete: deleting User removes Authorization row', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'cascade',
       firstName: 'Cas',

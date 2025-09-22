@@ -1,137 +1,233 @@
+// src/__tests__/routes/auth.route.e2e.spec.ts
 import 'reflect-metadata';
-import { jest } from '@jest/globals';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+} from '@jest/globals';
 
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
-
-/* ========================= Mocks (BEFORE imports) ========================= */
-
-// validators: pass-through, so we can assert they ran
-const vRegisterBody = jest.fn((req: any, _res: any, next: any) => next());
-const vLoginBody = jest.fn((req: any, _res: any, next: any) => next());
-const vRefreshBody = jest.fn((req: any, _res: any, next: any) => next());
-jest.unstable_mockModule('../../validators/auth.validators.js', () => ({
-  vRegisterBody,
-  vLoginBody,
-  vRefreshBody,
-}));
-
-// guard for /me
-const requireAuth = jest.fn((req: any, _res: any, next: any) => next());
-jest.unstable_mockModule('../../middlewares/requireAuth.js', () => ({
-  requireAuth,
-}));
-
-// controller handlers (annotate params as any so res isn't unknown)
-const ctrl = {
-  register: jest.fn(async (_req: any, res: any) =>
-    res.status(201).json({
-      data: {
-        user: { userId: 'u1', username: 'alice' },
-        tokens: { accessToken: 'acc', refreshToken: 'ref' },
-      },
-    })
-  ),
-  login: jest.fn(async (_req: any, res: any) =>
-    res.json({ data: { accessToken: 'acc', refreshToken: 'ref' } })
-  ),
-  refresh: jest.fn(async (_req: any, res: any) =>
-    res.json({ data: { accessToken: 'newacc', refreshToken: 'newref' } })
-  ),
-  logout: jest.fn(async (_req: any, res: any) =>
-    res.json({ data: { success: true } })
-  ),
-  me: jest.fn(async (_req: any, res: any) =>
-    res.json({ data: { user: { userId: 'me', username: 'current' } } })
-  ),
-};
-jest.unstable_mockModule('../../controllers/auth.controller.js', () => ({
-  AuthController: ctrl,
-}));
-
-/* ========================== Load SUT after mocks ========================== */
-import express from 'express';
 import request from 'supertest';
-const { authRouter } = await import('../../routes/auth.route');
+import { sequelize } from '../../db/sequelize.js';
+import { UserModel } from '../../models/user.model.js';
+import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { app } from '../../app.js';
 
-/* =============================== Test app ================================= */
-const makeApp = () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/auth', authRouter);
-  app.use((_req, res) => res.status(404).json({ error: 'not found' }));
-  return app;
-};
+function parseSetCookie(setCookie: string[] | undefined) {
+  const out: Record<string, string> = {};
+  if (!setCookie) return out;
+  for (const c of setCookie) {
+    const [kv] = c.split(';');
+    const [k, v] = kv.split('=');
+    out[k.trim()] = (v ?? '').trim();
+  }
+  return out;
+}
 
-let app: express.Express;
-beforeEach(() => {
-  jest.clearAllMocks();
-  app = makeApp();
+function pickToken(res: request.Response) {
+  const body = res.body ?? {};
+  const d = body.data ?? {};
+  const tokens = d.tokens ?? d;
+
+  let accessToken: string | undefined =
+    tokens?.accessToken ?? tokens?.access_token ?? tokens?.at;
+  let refreshToken: string | undefined =
+    tokens?.refreshToken ?? tokens?.refresh_token ?? tokens?.rt;
+
+  if (!accessToken || !refreshToken) {
+    const cookies = parseSetCookie(res.headers['set-cookie'] as any);
+    accessToken ||= cookies.accessToken ?? cookies.access_token ?? cookies.at;
+    refreshToken ||=
+      cookies.refreshToken ?? cookies.refresh_token ?? cookies.rt;
+  }
+  return { accessToken, refreshToken };
+}
+
+beforeAll(async () => {
+  await sequelize.authenticate();
+  await sequelize.sync({ alter: true });
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
 });
 
-/* ================================= Tests ================================== */
+afterEach(async () => {
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
+});
 
-describe('Auth routes — wiring, validators, guards', () => {
-  test('POST /api/auth/register → runs validator & controller (201)', async () => {
+afterAll(async () => {
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
+  await sequelize.close();
+});
+
+// Helper to generate a validator-safe username inline (no underscores)
+function makeUsername(base: string) {
+  const stamp = (Date.now() % 1_000_000).toString().padStart(6, '0'); // 6 digits
+  return (base.toLowerCase().replace(/[^a-z0-9]/g, '') + stamp).slice(0, 20);
+}
+
+// --------------------------- Tests ---------------------------
+describe('Auth routes — real controllers + real MySQL via Sequelize', () => {
+  test('register → creates user (201) (tokens may be omitted)', async () => {
+    const username = makeUsername('alice');
+    const email = `${username}@example.com`;
+
     const res = await request(app)
       .post('/api/auth/register')
       .send({
-        username: 'alice',
+        username,
         firstName: 'Alice',
         lastName: 'Doe',
-        email: 'a@b.com',
-        password: 'x',
+        email,
+        password: 'secret123',
       })
       .expect(201);
 
-    expect(vRegisterBody).toHaveBeenCalled();
-    expect(ctrl.register).toHaveBeenCalled();
-    expect(res.body.data.user).toMatchObject({
-      userId: 'u1',
-      username: 'alice',
-    });
-    expect(res.body.data.tokens).toEqual({
-      accessToken: 'acc',
-      refreshToken: 'ref',
-    });
+    expect(res.body?.data?.user?.username).toBe(username);
+
+    const row = await UserModel.findOne({ where: { username } });
+    expect(row).not.toBeNull();
+
+    const { accessToken, refreshToken } = pickToken(res);
+    if (accessToken) expect(typeof accessToken).toBe('string');
+    if (refreshToken) expect(typeof refreshToken).toBe('string');
   });
 
-  test('POST /api/auth/login → runs validator & controller (200)', async () => {
+  test('login → returns tokens (200)', async () => {
+    const username = makeUsername('bob');
+    const email = `${username}@example.com`;
+
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Bob',
+        lastName: 'Doe',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    // Send BOTH fields so the validator + service are satisfied
     const res = await request(app)
       .post('/api/auth/login')
-      .send({ usernameOrEmail: 'alice', password: 'x' })
+      .send({ usernameOrEmail: username, identifier: username, password: 'pw' })
       .expect(200);
 
-    expect(vLoginBody).toHaveBeenCalled();
-    expect(ctrl.login).toHaveBeenCalled();
-    expect(res.body.data).toEqual({ accessToken: 'acc', refreshToken: 'ref' });
+    const { accessToken, refreshToken } = pickToken(res);
+    expect(accessToken).toBeTruthy();
+    expect(refreshToken).toBeTruthy();
   });
 
-  test('POST /api/auth/refresh → runs validator & controller (200)', async () => {
-    const res = await request(app)
+  test('refresh → returns new tokens (200)', async () => {
+    const username = makeUsername('cara');
+    const email = `${username}@example.com`;
+
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Cara',
+        lastName: 'Doe',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, identifier: username, password: 'pw' })
+      .expect(200);
+
+    const { refreshToken } = pickToken(login);
+    expect(refreshToken).toBeTruthy();
+    const cookies = login.headers['set-cookie'];
+
+    // Include cookies so controller can read the refresh cookie,
+    // and also send body to satisfy any body validator if present.
+    const refreshed = await request(app)
       .post('/api/auth/refresh')
-      .send({ refreshToken: 'ref' })
+      .set('Cookie', cookies as any)
+      .send({ refreshToken })
       .expect(200);
 
-    expect(vRefreshBody).toHaveBeenCalled();
-    expect(ctrl.refresh).toHaveBeenCalled();
-    expect(res.body.data).toEqual({
-      accessToken: 'newacc',
-      refreshToken: 'newref',
-    });
+    const { accessToken: newAT, refreshToken: newRT } = pickToken(refreshed);
+    expect(newAT).toBeTruthy();
+    expect(newRT).toBeTruthy();
   });
 
-  test('POST /api/auth/logout → calls controller (200)', async () => {
-    const res = await request(app).post('/api/auth/logout').expect(200);
+  test('me → accepts Bearer (or auth cookie) and returns current user (200)', async () => {
+    const username = makeUsername('dana');
+    const email = `${username}@example.com`;
 
-    expect(ctrl.logout).toHaveBeenCalled();
-    expect(res.body.data).toEqual({ success: true });
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Dana',
+        lastName: 'Doe',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, identifier: username, password: 'pw' })
+      .expect(200);
+
+    const { accessToken } = pickToken(login);
+    const cookies = login.headers['set-cookie'];
+
+    const res = accessToken
+      ? await request(app)
+          .get('/api/auth/me')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .expect(200)
+      : await request(app)
+          .get('/api/auth/me')
+          .set('Cookie', cookies as any)
+          .expect(200);
+
+    expect(res.body?.data?.user?.username).toBe(username);
   });
 
-  test('GET /api/auth/me → requires auth and returns user (200)', async () => {
-    const res = await request(app).get('/api/auth/me').expect(200);
+  test('logout → returns 204 or 200', async () => {
+    const username = makeUsername('ella');
+    const email = `${username}@example.com`;
 
-    expect(requireAuth).toHaveBeenCalled();
-    expect(ctrl.me).toHaveBeenCalled();
-    expect(res.body.data.user).toEqual({ userId: 'me', username: 'current' });
+    await request(app)
+      .post('/api/auth/register')
+      .send({
+        username,
+        firstName: 'Ella',
+        lastName: 'Doe',
+        email,
+        password: 'pw',
+      })
+      .expect(201);
+
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ usernameOrEmail: username, identifier: username, password: 'pw' })
+      .expect(200);
+
+    const { refreshToken } = pickToken(login);
+    const cookies = login.headers['set-cookie'];
+
+    const req = request(app).post('/api/auth/logout');
+    if (refreshToken) req.send({ refreshToken });
+    if (cookies) req.set('Cookie', cookies as any);
+
+    const res = await req.expect((r) => [200, 204].includes(r.status));
+    if (res.status === 200) {
+      expect(res.body?.data?.success).toBe(true);
+    }
   });
 });

@@ -11,7 +11,7 @@
  *
  * Exports
  *  - validateRegisterBody   → username, firstName, lastName, email, password
- *  - validateLoginBody      → usernameOrEmail, password
+ *  - validateLoginBody      → identifier , password
  *  - validateRefreshBody    → refreshToken
  *
  * Usage (in routes):
@@ -87,20 +87,20 @@ export function vRegisterBody(
 
 /**
  * Validate body for `POST /api/auth/login`.
- * Requires: usernameOrEmail, password.
+ * Requires: identifier , password.
  */
 export function vLoginBody(
   req: Request,
   res: Response,
   next: NextFunction
 ) {
-  const { usernameOrEmail, password } = req.body ?? {};
+  const { identifier, password } = req.body ?? {};
   const errors: Array<{ field: string; message: string }> = [];
 
-  if (!isNonEmptyString(usernameOrEmail))
+  if (!isNonEmptyString(identifier))
     errors.push({
-      field: 'usernameOrEmail',
-      message: 'usernameOrEmail is required',
+      field: 'identifier ',
+      message: 'identifier  is required',
     });
   if (!isNonEmptyString(password))
     errors.push({ field: 'password', message: 'password is required' });

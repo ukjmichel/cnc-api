@@ -1,22 +1,4 @@
 // src/__tests__/models/user.model.spec.ts
-/**
- * =============================================================================
- * UserModel (MySQL) — integration tests (uses src/config/env.ts)
- * =============================================================================
- * This suite reads DB connection info from your dynamic config:
- *   import { config } from '../../config/env.js'
- * so values are resolved by `requireEnv` with TEST__* overrides when
- * NODE_ENV=test.
- *
- * It covers:
- *  - creation + normalization (username/email/first/last)
- *  - bcrypt hashing + validatePassword()
- *  - toJSON() hides password
- *  - unique constraints (username, email)
- *  - re-hash when password changes
- * =============================================================================
- */
-
 import 'reflect-metadata';
 import {
   describe,
@@ -26,14 +8,14 @@ import {
   afterAll,
   afterEach,
 } from '@jest/globals';
-
 import { Sequelize } from 'sequelize-typescript';
 import { UniqueConstraintError } from 'sequelize';
 import { UserModel } from '../../models/user.model.js';
+import { AuthorizationModel } from '../../models/authorization.model.js';
 import { config } from '../../config/env.js';
+import { cleanAllTables } from '../../../test-utils/mysql.js';
 
 let sequelize: Sequelize;
-let canConnect = false;
 
 function makeSequelize(): Sequelize {
   return new Sequelize({
@@ -50,52 +32,36 @@ function makeSequelize(): Sequelize {
       acquire: config.mysqlPool.acquire,
       idle: config.mysqlPool.idle,
     },
-    models: [UserModel],
+    models: [UserModel, AuthorizationModel],
   });
 }
 
 beforeAll(async () => {
   sequelize = makeSequelize();
-  try {
-    await sequelize.authenticate();
-    canConnect = true;
-    await sequelize.sync({ force: true });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[UserModel MySQL tests] Skipping — cannot connect to MySQL:',
-      (err as Error).message
-    );
-  }
-});
-
-afterAll(async () => {
-  if (canConnect && sequelize) await sequelize.close();
+  await sequelize.authenticate();
+  await sequelize.sync();
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
 });
 
 afterEach(async () => {
-  if (!canConnect) return;
-  await UserModel.destroy({ where: {}, truncate: true, cascade: true });
+  await sequelize.transaction(async (t) => {
+    await cleanAllTables(t);
+  });
+});
+
+afterAll(async () => {
+  await sequelize.close();
 });
 
 describe('UserModel (MySQL)', () => {
-  const skipIfNoDB = () => {
-    if (!canConnect) {
-      // eslint-disable-next-line no-console
-      console.warn('[UserModel tests] DB not reachable; skipping test.');
-      return true;
-    }
-    return false;
-  };
-
   test('creates user, normalizes fields, hashes password, and hides it in JSON', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'JohnDOE',
       firstName: ' John  ',
       lastName: "  O'Connor ",
-      email: '  JOHN@EXAMPLE.COM ',
+      email: 'JOHN@EXAMPLE.COM', // no spaces; validators run first
       password: 'secret123',
       verified: false,
     });
@@ -106,11 +72,9 @@ describe('UserModel (MySQL)', () => {
     expect(u.firstName).toBe('John');
     expect(u.lastName).toBe("O'Connor");
 
-    // Hashing
+    // Hashing + validation
     expect(u.password).not.toBe('secret123');
     expect(u.password.length).toBeGreaterThan(20);
-
-    // Validate password
     await expect(u.validatePassword('secret123')).resolves.toBe(true);
     await expect(u.validatePassword('wrong')).resolves.toBe(false);
 
@@ -121,21 +85,19 @@ describe('UserModel (MySQL)', () => {
   });
 
   test('unique constraints on username and email', async () => {
-    if (skipIfNoDB()) return;
-
     await UserModel.create({
       username: 'uniqueuser',
-      firstName: 'A',
-      lastName: 'B',
+      firstName: 'Alpha',
+      lastName: 'Beta',
       email: 'u@e.com',
       password: 'x',
     });
 
     await expect(
       UserModel.create({
-        username: 'uniqueuser',
-        firstName: 'C',
-        lastName: 'D',
+        username: 'uniqueuser', // dup username
+        firstName: 'Gamma',
+        lastName: 'Delta',
         email: 'another@e.com',
         password: 'y',
       })
@@ -144,21 +106,19 @@ describe('UserModel (MySQL)', () => {
     await expect(
       UserModel.create({
         username: 'anotheruser',
-        firstName: 'E',
-        lastName: 'F',
-        email: 'u@e.com',
+        firstName: 'Epsilon',
+        lastName: 'Zeta',
+        email: 'u@e.com', // dup email
         password: 'z',
       })
     ).rejects.toBeInstanceOf(UniqueConstraintError);
   });
 
   test('re-hashes when password changes (validatePassword respects new value)', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'changer',
-      firstName: 'A',
-      lastName: 'B',
+      firstName: 'Alice',
+      lastName: 'Brown',
       email: 'changer@example.com',
       password: 'oldpass',
     });
@@ -174,8 +134,6 @@ describe('UserModel (MySQL)', () => {
   });
 
   test('normalizes on update as well', async () => {
-    if (skipIfNoDB()) return;
-
     const u = await UserModel.create({
       username: 'mixedCase',
       firstName: '  First ',
@@ -184,8 +142,8 @@ describe('UserModel (MySQL)', () => {
       password: 'p',
     });
 
-    u.username = '  MixedCASE2 ';
-    u.email = 'SECOND@MAIL.COM ';
+    u.username = 'MixedCASE2'; // no spaces
+    u.email = 'SECOND@MAIL.COM'; // no spaces
     u.firstName = '  Alice ';
     u.lastName = ' SMITH  ';
     await u.save();
