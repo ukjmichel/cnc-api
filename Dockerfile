@@ -32,7 +32,7 @@ WORKDIR /usr/src/app
 
 # Only install production dependencies
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install 
 
 # Install PM2 globally for process management
 RUN npm install -g pm2
