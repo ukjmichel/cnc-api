@@ -10,7 +10,7 @@ import 'reflect-metadata';
 import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 import { UserModel } from '../../models/user.model.js';
 import { AuthorizationModel } from '../../models/authorization.model.js';
 import { app } from '../../app.js';

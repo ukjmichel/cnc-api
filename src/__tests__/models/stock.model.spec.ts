@@ -13,7 +13,7 @@ import 'reflect-metadata';
 import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
 import { UniqueConstraintError } from 'sequelize';
 import { sequelize } from '../../db/sequelize.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 import { ProductModel } from '../../models/product.model.js';
 import { StockModel } from '../../models/stock.model.js';
 

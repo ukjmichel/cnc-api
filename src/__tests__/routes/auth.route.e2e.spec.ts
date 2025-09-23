@@ -12,7 +12,7 @@ import {
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
 import { UserModel } from '../../models/user.model.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 import { app } from '../../app.js';
 
 function parseSetCookie(setCookie: string[] | undefined) {

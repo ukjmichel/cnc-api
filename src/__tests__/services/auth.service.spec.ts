@@ -26,7 +26,7 @@ import request from 'supertest';
 
 import { Sequelize } from 'sequelize-typescript';
 import { config } from '../../config/env.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 
 import { UserModel } from '../../models/user.model.js';
 import { AuthorizationModel } from '../../models/authorization.model.js';

@@ -13,7 +13,7 @@ import {
   ForeignKeyConstraintError,
 } from 'sequelize';
 import { sequelize } from '../../db/sequelize.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 import { ProductModel } from '../../models/product.model.js';
 import {
   ProductImageModel,

@@ -16,7 +16,8 @@
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": false,
-    "types": ["node", "jest"]
+    "types": ["node", "jest"],
+    "removeComments": false
   },
   "include": ["*.ts", "**/*.ts", "src/**/*", "jest.config.ts"],
   "exclude": [

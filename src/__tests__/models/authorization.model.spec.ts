@@ -30,7 +30,7 @@ import { ValidationError, UniqueConstraintError } from 'sequelize';
 import { UserModel } from '../../models/user.model.js';
 import { AuthorizationModel } from '../../models/authorization.model.js';
 import { config } from '../../config/env.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 
 let sequelize: Sequelize;
 

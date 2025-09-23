@@ -1,35 +1,74 @@
 // src/docs/swagger.ts
+import path from 'node:path';
 import swaggerJSDoc from 'swagger-jsdoc';
 
-/**
- * Build Swagger/OpenAPI spec.
- * In dev (ts-node), scan .ts; in prod (compiled), scan .js in /dist.
- */
 const isProd = process.env.NODE_ENV === 'production';
+const root = process.cwd();
 
-export const swaggerSpec = swaggerJSDoc({
-  definition: {
-    openapi: '3.0.3',
-    info: {
-      title: 'CNC API',
-      version: '1.0.0',
-      description: 'API documentation for CNC endpoints',
-    },
-    servers: [{ url: 'http://localhost:3000', description: 'Local dev' }],
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
+// Helper function to safely create swagger spec
+const createSwaggerSpec = () => {
+  try {
+    const apiPaths = isProd
+      ? [
+          // In production, read from compiled JS files
+          path.join(root, 'dist', 'src', '**', '*.js'),
+          // Optional: include YAML fragments
+          path.join(root, 'src', 'docs', '**', '*.{yml,yaml}'),
+        ]
+      : [
+          // In development, read from TypeScript files
+          path.join(root, 'src', '**', '*.ts'),
+          path.join(root, 'src', 'docs', '**', '*.{yml,yaml}'),
+        ];
+
+    console.log('Swagger API paths:', apiPaths);
+    console.log('Current working directory:', root);
+    console.log('Environment:', isProd ? 'production' : 'development');
+
+    const options = {
+      definition: {
+        openapi: '3.0.3',
+        info: {
+          title: 'CNC API',
+          version: '1.0.0',
+          description: 'API documentation for CNC endpoints',
         },
+        servers: [
+          {
+            url: isProd ? 'http://localhost:3000' : 'http://localhost:3000',
+            description: isProd ? 'Production' : 'Local dev',
+          },
+        ],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: 'http',
+              scheme: 'bearer',
+              bearerFormat: 'JWT',
+            },
+          },
+        },
+        security: [{ bearerAuth: [] }],
       },
-    },
-    security: [{ bearerAuth: [] }],
-  },
-  apis: isProd
-    ? ['./dist/src/routes/**/*.js', './dist/src/controllers/**/*.js']
-    : ['./src/routes/**/*.ts', './src/controllers/**/*.ts'],
-});
+      apis: apiPaths,
+    };
+
+    return swaggerJSDoc(options);
+  } catch (error) {
+    console.error('Failed to initialize Swagger:', error);
+    // Return a minimal spec to prevent app crash
+    return {
+      openapi: '3.0.3',
+      info: {
+        title: 'CNC API',
+        version: '1.0.0',
+        description: 'API documentation temporarily unavailable',
+      },
+      paths: {},
+    };
+  }
+};
+
+export const swaggerSpec = createSwaggerSpec();
 
 export default swaggerSpec;

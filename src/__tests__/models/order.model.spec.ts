@@ -11,7 +11,7 @@
 import 'reflect-metadata';
 import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
 import { sequelize } from '../../db/sequelize.js';
-import { cleanAllTables } from '../../../test-utils/mysql.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 import { UserModel } from '../../models/user.model.js';
 import { OrderModel } from '../../models/order.model.js';
 

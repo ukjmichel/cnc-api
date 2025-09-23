@@ -9,16 +9,18 @@
 
 import type { Transaction } from 'sequelize';
 
-import { AuthorizationModel } from '../src/models/authorization.model.js';
-import { UserModel } from '../src/models/user.model.js';
+import { AuthorizationModel } from '../models/authorization.model.js';
+import { UserModel } from '../models/user.model.js';
 
-import { ProductModel } from '../src/models/product.model.js';
-import { ProductImageModel } from '../src/models/product-image.model.js';
+import { ProductModel } from '../models/product.model.js';
+import { ProductImageModel } from '../models/product-image.model.js';
 
-import { StockModel } from '../src/models/stock.model.js';
-import { StockMovementModel } from '../src/models/stock-movement.model.js';
+import { StockModel } from '../models/stock.model.js';
+import { StockMovementModel } from '../models/stock-movement.model.js';
 
-import { OrderModel } from '../src/models/order.model.js';
+import { OrderModel } from '../models/order.model.js';
+import { OrderItemModel } from '../models/order-item.model.js';
+import { PickupSlotModel } from '../models/pickup-slot.model.js';
 
 /**
  * Delete everything in a safe FK order.
@@ -30,12 +32,17 @@ export async function cleanAllTables(tx?: Transaction): Promise<void> {
 
   // --- Children first (deepest) ------------------------------------------------
 
+  // Order items depend on orders and stocks
+  await OrderItemModel.destroy({ where: {}, ...opt(tx) }).catch(() => {
+    /* table may not exist in some suites */
+  });
+
   // Stock movements depend on stocks/products
   await StockMovementModel.destroy({ where: {}, ...opt(tx) }).catch(() => {
     /* table may not exist in some suites */
   });
 
-  // Orders may depend on users (nullable FK but still a child)
+  // Orders may depend on users and pickup slots
   await OrderModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
 
   // Stocks & product images depend on products
@@ -44,6 +51,9 @@ export async function cleanAllTables(tx?: Transaction): Promise<void> {
 
   // Authorization depends on users
   await AuthorizationModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
+
+  // Pickup slots can be referenced by orders (parent relative to orders)
+  await PickupSlotModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
 
   // --- Parents last ------------------------------------------------------------
 
