@@ -21,16 +21,12 @@ const mkUsername = (prefix: string) =>
   (Date.now() % 1_000_000).toString().padStart(6, '0');
 
 describe('OrderModel — integration (MySQL)', () => {
-  beforeAll(async () => {
-    await sequelize.authenticate();
-    await sequelize.sync({ alter: true });
+ beforeAll(async () => {
+   await sequelize.authenticate();
+   await sequelize.sync(); 
+   await cleanAllTables(); 
+ });
 
-    // Fresh DB for this suite
-    await sequelize.transaction(async (t) => {
-      await OrderModel.destroy({ where: {}, transaction: t });
-      await cleanAllTables(t);
-    });
-  });
 
   afterAll(async () => {
     await sequelize.close();

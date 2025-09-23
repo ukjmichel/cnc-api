@@ -24,8 +24,8 @@ import { UniqueConstraintError, ValidationError } from 'sequelize';
 
 import { config } from '../../config/env.js';
 import { ProductModel } from '../../models/product.model.js';
-
-let sequelize: Sequelize;
+import { cleanAllTables } from '../../test-utils/mysql.js';
+import { sequelize } from '../../db/sequelize.js';
 
 function makeSequelize(): Sequelize {
   return new Sequelize({
@@ -47,25 +47,17 @@ function makeSequelize(): Sequelize {
 }
 
 beforeAll(async () => {
-  sequelize = makeSequelize();
-
-  // Fail fast if DB is not reachable
   await sequelize.authenticate();
-
-  // Ensure table exists (don’t drop; preserve FKs/indexes)
   await sequelize.sync();
-
-  // Start from a known-empty state
-  await ProductModel.destroy({ where: {} });
+  await cleanAllTables(); 
 });
 
 afterAll(async () => {
-  if (sequelize) await sequelize.close();
+  await sequelize.close();
 });
 
 afterEach(async () => {
-  // No FKs here; regular DELETE is fine and deterministic
-  await ProductModel.destroy({ where: {} });
+  await cleanAllTables();
 });
 
 describe('ProductModel (MySQL)', () => {

@@ -101,9 +101,7 @@ beforeAll(async () => {
   await sequelize.sync({ alter: true });
 
   // Fresh DB
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
 
   // Create an admin directly in DB
   const admin = await UserModel.create({

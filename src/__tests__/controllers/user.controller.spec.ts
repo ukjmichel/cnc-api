@@ -10,6 +10,7 @@ const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
 const mockSerializeUserForResponse = jest.fn((u: any) => u);
 const mockSerializeUsers = jest.fn((arr: any[]) => arr);
 
+
 jest.unstable_mockModule('../../serializers/user.serializer.js', () => ({
   serializeUserForResponse: mockSerializeUserForResponse,
   serializeUsers: mockSerializeUsers,

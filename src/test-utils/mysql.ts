@@ -1,68 +1,24 @@
-// test-utils/mysql.ts
-/**
- * Utilities for MySQL-backed integration tests.
- * - cleanAllTables(): removes rows from child → parent to satisfy FKs.
- *
- * IMPORTANT: we import using ".js" suffix so NodeNext resolution works
- * after TypeScript compilation (dist/test-utils/mysql.js → dist/src/...).
- */
+// src/test-utils/mysql.ts
+import { sequelize } from '../db/sequelize';
 
-import type { Transaction } from 'sequelize';
+export async function cleanAllTables(): Promise<void> {
+  const qi = sequelize.getQueryInterface();
 
-import { AuthorizationModel } from '../models/authorization.model.js';
-import { UserModel } from '../models/user.model.js';
+  // 1) Disable FKs so delete order doesn't matter
+  await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
 
-import { ProductModel } from '../models/product.model.js';
-import { ProductImageModel } from '../models/product-image.model.js';
+  // 2) Get all table names (handles both string[] and { tableName }[])
+  const raw = await qi.showAllTables();
+  const tableNames = (raw as any[]).map((t) =>
+    typeof t === 'string' ? t : t.tableName
+  );
 
-import { StockModel } from '../models/stock.model.js';
-import { StockMovementModel } from '../models/stock-movement.model.js';
+  // 3) Delete everything (no TRUNCATE); skip SequelizeMeta if present
+  for (const name of tableNames) {
+    if (String(name).toLowerCase() === 'sequelizemeta') continue;
+    await sequelize.query(`DELETE FROM \`${name}\``);
+  }
 
-import { OrderModel } from '../models/order.model.js';
-import { OrderItemModel } from '../models/order-item.model.js';
-import { PickupSlotModel } from '../models/pickup-slot.model.js';
-
-/**
- * Delete everything in a safe FK order.
- * Pass a Sequelize transaction when you want this to be part of a broader setup/teardown tx.
- */
-export async function cleanAllTables(tx?: Transaction): Promise<void> {
-  const opt = (transaction?: Transaction) =>
-    transaction ? { transaction } : {};
-
-  // --- Children first (deepest) ------------------------------------------------
-
-  // Order items depend on orders and stocks
-  await OrderItemModel.destroy({ where: {}, ...opt(tx) }).catch(() => {
-    /* table may not exist in some suites */
-  });
-
-  // Stock movements depend on stocks/products
-  await StockMovementModel.destroy({ where: {}, ...opt(tx) }).catch(() => {
-    /* table may not exist in some suites */
-  });
-
-  // Orders may depend on users and pickup slots
-  await OrderModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
-
-  // Stocks & product images depend on products
-  await StockModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
-  await ProductImageModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
-
-  // Authorization depends on users
-  await AuthorizationModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
-
-  // Pickup slots can be referenced by orders (parent relative to orders)
-  await PickupSlotModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
-
-  // --- Parents last ------------------------------------------------------------
-
-  await ProductModel.destroy({ where: {}, ...opt(tx) }).catch(() => {});
-
-  // Users (use individualHooks in case there are model hooks)
-  await UserModel.destroy({
-    where: {},
-    individualHooks: true,
-    ...opt(tx),
-  }).catch(() => {});
+  // 4) Re-enable FKs
+  await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
 }

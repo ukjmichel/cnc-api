@@ -76,9 +76,7 @@ let currentUserId = `U${Date.now()}`; // used for seeded orders
 beforeAll(async () => {
   await sequelize.authenticate();
   await sequelize.sync({ alter: true });
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
 
   // Create an admin and login to get cookies + optional Bearer
   const admin = await UserModel.create({

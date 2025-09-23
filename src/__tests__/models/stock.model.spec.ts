@@ -22,12 +22,11 @@ const mkProductId = (p = 'SKU') =>
   `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
 describe('StockModel — integration (MySQL)', () => {
+  // src/__tests__/models/stock-movement.model.spec.ts
   beforeAll(async () => {
     await sequelize.authenticate();
-    await sequelize.sync({ alter: true });
-    await sequelize.transaction(async (t) => {
-      await cleanAllTables(t);
-    });
+    await sequelize.sync(); 
+    await cleanAllTables(); 
   });
 
   afterAll(async () => {
@@ -182,14 +181,9 @@ describe('StockModel — integration (MySQL)', () => {
 
     /**
      * IMPORTANT:
-     * The composite-unique is defined on the shadow columns:
-     *   _uk_productId, _uk_location, _uk_zone, _uk_expirationDate
-     * They’re normally kept in sync by @BeforeValidate (normalize hook).
-     * On instance updates, Sequelize may not mark those shadow fields as "changed"
-     * just because the hook assigned them, so they might not be sent in the UPDATE.
-     *
-     * To reliably hit the database unique constraint in this test, we explicitly
-     * set those shadow fields along with the public fields before save().
+     * If your model uses shadow columns for the composite unique index
+     * (e.g. _uk_* fields) and a normalize hook, set them explicitly so the
+     * UPDATE hits the DB unique constraint in this test.
      */
     b.set({
       location: '  D1  ',
@@ -204,8 +198,8 @@ describe('StockModel — integration (MySQL)', () => {
 
     await expect(b.save()).rejects.toBeInstanceOf(UniqueConstraintError);
 
-    // Also verify normalization applies on a benign update (no collision)
-    a.set({ location: '  D1  ', zone: '  Z-5  ' }); // no real change, but normalization runs
+    // Benign update still normalizes and succeeds
+    a.set({ location: '  D1  ', zone: '  Z-5  ' });
     await expect(a.save()).resolves.toBeDefined();
   });
 });

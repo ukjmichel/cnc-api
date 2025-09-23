@@ -8,47 +8,21 @@ import {
   afterAll,
   afterEach,
 } from '@jest/globals';
-import { Sequelize } from 'sequelize-typescript';
+
 import { UniqueConstraintError } from 'sequelize';
 import { UserModel } from '../../models/user.model.js';
-import { AuthorizationModel } from '../../models/authorization.model.js';
-import { config } from '../../config/env.js';
+
 import { cleanAllTables } from '../../test-utils/mysql.js';
-
-let sequelize: Sequelize;
-
-function makeSequelize(): Sequelize {
-  return new Sequelize({
-    dialect: 'mysql',
-    host: config.mysqlHost,
-    port: config.mysqlPort,
-    database: config.mysqlDatabase,
-    username: config.mysqlUser,
-    password: config.mysqlPassword,
-    logging: config.dbLogSql ? console.log : false,
-    pool: {
-      max: config.mysqlPool.max,
-      min: config.mysqlPool.min,
-      acquire: config.mysqlPool.acquire,
-      idle: config.mysqlPool.idle,
-    },
-    models: [UserModel, AuthorizationModel],
-  });
-}
+import { sequelize } from '../../db/sequelize.js';
 
 beforeAll(async () => {
-  sequelize = makeSequelize();
   await sequelize.authenticate();
-  await sequelize.sync();
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await sequelize.sync(); 
+  await cleanAllTables();
 });
 
 afterEach(async () => {
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
 });
 
 afterAll(async () => {
@@ -61,7 +35,7 @@ describe('UserModel (MySQL)', () => {
       username: 'JohnDOE',
       firstName: ' John  ',
       lastName: "  O'Connor ",
-      email: 'JOHN@EXAMPLE.COM', // no spaces; validators run first
+      email: 'JOHN@EXAMPLE.COM', 
       password: 'secret123',
       verified: false,
     });

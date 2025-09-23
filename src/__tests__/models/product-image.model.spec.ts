@@ -25,11 +25,15 @@ const mkProductId = (prefix = 'PROD') =>
 
 beforeAll(async () => {
   await sequelize.authenticate();
-  await sequelize.sync({ alter: true });
+  await sequelize.sync(); 
+  await cleanAllTables(); 
 });
 
 beforeEach(async () => {
-  await sequelize.transaction(async (t) => cleanAllTables(t));
+  await cleanAllTables();
+});
+afterEach(async () => {
+  await cleanAllTables();
 });
 
 afterAll(async () => {

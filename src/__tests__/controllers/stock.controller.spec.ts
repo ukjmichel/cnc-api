@@ -236,35 +236,28 @@ describe('StockController.list', () => {
     const res = makeRes();
     const next = makeNext();
 
-    const built = {
-      q: 'A1',
-      page: 2,
-      pageSize: 10,
-      orderBy: 'createdAt',
-      orderDir: 'DESC',
-    } as any;
-    jest.spyOn(StockQueries, 'buildStockListQuery').mockReturnValue(built);
-    jest.spyOn(StockService, 'list').mockResolvedValue({
+    // Use the real builder (don’t spy on ESM namespace)
+    const built = StockQueries.buildStockListQuery(req.query as any);
+
+    const listSpy = jest.spyOn(StockService, 'list').mockResolvedValue({
       lots: [mkLot({ productId: 'P1' })],
       total: 25,
-      page: 2,
-      pageSize: 10,
+      page: built.page as number,
+      pageSize: built.pageSize as number,
       pages: 3,
     });
 
     await StockController.list(req, res, next);
 
-    expect(StockQueries.buildStockListQuery).toHaveBeenCalledWith(
-      req.query as any
-    );
+    expect(listSpy).toHaveBeenCalledWith(built);
     expect(res.status).toHaveBeenCalledWith(200);
     expect((res.body?.data?.lots as any[]).map((x) => x.productId)).toEqual([
       'P1',
     ]);
     expect(res.body?.meta).toEqual({
       total: 25,
-      page: 2,
-      pageSize: 10,
+      page: built.page,
+      pageSize: built.pageSize,
       pages: 3,
     });
   });
@@ -278,34 +271,28 @@ describe('StockController.filter', () => {
     const res = makeRes();
     const next = makeNext();
 
-    const built = {
-      q: 'B1',
-      page: 1,
-      pageSize: 5,
-      filters: { location: ['B1'] },
-    } as any;
-    jest.spyOn(StockQueries, 'buildStockFilterQuery').mockReturnValue(built);
-    jest.spyOn(StockService, 'filter').mockResolvedValue({
+    // Use the real builder
+    const built = StockQueries.buildStockFilterQuery(req.query as any);
+
+    const filterSpy = jest.spyOn(StockService, 'filter').mockResolvedValue({
       lots: [mkLot({ productId: 'P2', location: 'B1' })],
       total: 5,
-      page: 1,
-      pageSize: 5,
+      page: built.page as number,
+      pageSize: built.pageSize as number,
       pages: 1,
     });
 
     await StockController.filter(req, res, next);
 
-    expect(StockQueries.buildStockFilterQuery).toHaveBeenCalledWith(
-      req.query as any
-    );
+    expect(filterSpy).toHaveBeenCalledWith(built);
     expect(res.status).toHaveBeenCalledWith(200);
     expect((res.body?.data?.lots as any[]).map((x) => x.productId)).toEqual([
       'P2',
     ]);
     expect(res.body?.meta).toEqual({
       total: 5,
-      page: 1,
-      pageSize: 5,
+      page: built.page,
+      pageSize: built.pageSize,
       pages: 1,
     });
   });

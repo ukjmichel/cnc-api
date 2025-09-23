@@ -20,6 +20,7 @@ import {
 } from '@jest/globals';
 import { sequelize } from '../../db/sequelize.js';
 import { OrderItemModel } from '../../models/order-item.model.js';
+import { cleanAllTables } from '../../test-utils/mysql.js';
 
 // UUID helper compatible with UUID column (CHAR(36) in MySQL)
 const uuid = () =>
@@ -32,23 +33,12 @@ const uuid = () =>
 describe('OrderItemModel — integration (MySQL)', () => {
   beforeAll(async () => {
     await sequelize.authenticate();
-
-    // Ensure the model is registered on this Sequelize instance (idempotent).
-    try {
-      // @ts-ignore: addModels exists on sequelize-typescript Sequelize
-      if (typeof (sequelize as any).addModels === 'function') {
-        (sequelize as any).addModels([OrderItemModel]);
-      }
-    } catch {
-      // If already added/initialized, ignore.
-    }
-
-    // Create a fresh table for this suite
-    await OrderItemModel.sync({ force: true });
+    await sequelize.sync(); 
+    await cleanAllTables(); 
   });
 
   beforeEach(async () => {
-    await OrderItemModel.destroy({ where: {} });
+    await cleanAllTables();
   });
 
   afterAll(async () => {

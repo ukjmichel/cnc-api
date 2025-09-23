@@ -23,17 +23,11 @@ const mkProductId = (p = 'SKU') =>
   `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
 describe('StockMovementModel — integration (MySQL)', () => {
+  // src/__tests__/models/stock-movement.model.spec.ts
   beforeAll(async () => {
     await sequelize.authenticate();
-    await sequelize.sync({ alter: true });
-
-    // Clean tables in safe FK order (movements -> stocks -> products -> auth/users via util)
-    await sequelize.transaction(async (t) => {
-      await StockMovementModel.destroy({ where: {}, transaction: t });
-      await StockModel.destroy({ where: {}, transaction: t });
-      await ProductModel.destroy({ where: {}, transaction: t });
-      await cleanAllTables(t);
-    });
+    await sequelize.sync();
+    await cleanAllTables(); 
   });
 
   afterAll(async () => {

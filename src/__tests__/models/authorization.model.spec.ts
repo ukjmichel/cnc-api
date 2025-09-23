@@ -1,17 +1,9 @@
 // src/__tests__/models/authorization.model.spec.ts
 /**
- * =============================================================================
- * AuthorizationModel (MySQL) — integration-ish tests
- * =============================================================================
- * Reads DB connection info from your dynamic config (src/config/env.ts).
- * Assumes DB is reachable; fails fast if not.
- *
- * Covers:
- *  - create with default role
- *  - enum validation (invalid role rejected)
- *  - unique constraint (one row per userId)
- *  - CASCADE delete: removing User deletes Authorization row
- * =============================================================================
+ * AuthorizationModel (MySQL) — integration tests
+ * - Utilise le sequelize partagé (src/db/sequelize.ts) pour éviter les doubles pools.
+ * - Schéma propre avec sync({ force: true }).
+ * - Nettoyage FK-safe entre tests via cleanAllTables().
  */
 
 import 'reflect-metadata';
@@ -24,59 +16,25 @@ import {
   afterEach,
 } from '@jest/globals';
 
-import { Sequelize } from 'sequelize-typescript';
 import { ValidationError, UniqueConstraintError } from 'sequelize';
 
+import { sequelize } from '../../db/sequelize.js';
 import { UserModel } from '../../models/user.model.js';
 import { AuthorizationModel } from '../../models/authorization.model.js';
-import { config } from '../../config/env.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';
 
-let sequelize: Sequelize;
-
-function makeSequelize(): Sequelize {
-  return new Sequelize({
-    dialect: 'mysql',
-    host: config.mysqlHost,
-    port: config.mysqlPort,
-    database: config.mysqlDatabase,
-    username: config.mysqlUser,
-    password: config.mysqlPassword,
-    logging: config.dbLogSql ? console.log : false,
-    pool: {
-      max: config.mysqlPool.max,
-      min: config.mysqlPool.min,
-      acquire: config.mysqlPool.acquire,
-      idle: config.mysqlPool.idle,
-    },
-    models: [UserModel, AuthorizationModel],
-  });
-}
-
 beforeAll(async () => {
-  sequelize = makeSequelize();
-
-  // Fail fast if DB is not reachable
   await sequelize.authenticate();
-
-  // Ensure schema exists without dropping; keeps FKs & indexes intact
-  await sequelize.sync();
-
-  // Start from a known-empty state (FK-safe)
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
-});
-
-afterAll(async () => {
-  if (sequelize) await sequelize.close();
+  await sequelize.sync(); 
+  await cleanAllTables(); 
 });
 
 afterEach(async () => {
-  // FK-safe cleanup between tests
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
+});
+
+afterAll(async () => {
+  await sequelize.close(); 
 });
 
 describe('AuthorizationModel (MySQL)', () => {
@@ -92,7 +50,7 @@ describe('AuthorizationModel (MySQL)', () => {
     const a = await AuthorizationModel.create({ userId: u.userId } as any);
 
     expect(a.userId).toBe(u.userId);
-    expect(a.role).toBe('user'); // defaultValue on column
+    expect(a.role).toBe('user'); // defaultValue
   });
 
   test('rejects invalid role (enum validation)', async () => {
@@ -145,13 +103,12 @@ describe('AuthorizationModel (MySQL)', () => {
       role: 'employee',
     } as any);
 
-    // sanity: row exists
     const before = await AuthorizationModel.findOne({
       where: { userId: u.userId },
     });
     expect(before).not.toBeNull();
 
-    await u.destroy(); // should cascade
+    await u.destroy(); // CASCADE
 
     const after = await AuthorizationModel.findOne({
       where: { userId: u.userId },

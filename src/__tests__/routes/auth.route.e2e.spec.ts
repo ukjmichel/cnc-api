@@ -48,21 +48,15 @@ function pickToken(res: request.Response) {
 beforeAll(async () => {
   await sequelize.authenticate();
   await sequelize.sync({ alter: true });
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
 });
 
 afterEach(async () => {
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
 });
 
 afterAll(async () => {
-  await sequelize.transaction(async (t) => {
-    await cleanAllTables(t);
-  });
+  await cleanAllTables();
   await sequelize.close();
 });
 
