@@ -9,8 +9,8 @@
  *  - updates re-run normalization and can hit unique violation
  */
 
-import 'reflect-metadata';
-import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
+
+
 import { UniqueConstraintError } from 'sequelize';
 import { sequelize } from '../../db/sequelize.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';

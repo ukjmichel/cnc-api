@@ -2,7 +2,7 @@
  * StockService — unit tests (no DB; pure Jest mocks)
  */
 
-import 'reflect-metadata';
+
 import {
   describe,
   test,

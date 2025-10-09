@@ -1,109 +1,14 @@
-// src/__tests__/routes/user.route.e2e.spec.ts
-import 'reflect-metadata';
-import { jest } from '@jest/globals';
+// src/__tests__/services/user.service.spec.ts
 
-import {
-  DuplicateError,
-  NotFoundError,
-  AuthError,
-} from '../../errors/index.js';
+/**
+ * UserService — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
+ */
 
-/* -------------------- small helper to avoid `never` issues -------------------- */
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
+import { Op, UniqueConstraintError } from 'sequelize';
 
-/* ---------------- ESM mocks must be registered BEFORE imports ---------------- */
+/* ================================ Helpers ================================= */
 
-const mockSerializeUser = jest.fn((u: any) => {
-  if (!u) return u;
-  const { password, ...rest } = u;
-  return rest;
-});
-const mockSerializeUsers = jest.fn((arr: any[]) =>
-  (arr || []).map((u) => {
-    if (!u) return u;
-    const { password, ...rest } = u;
-    return rest;
-  })
-);
-jest.unstable_mockModule('../../serializers/user.serializer.js', () => ({
-  serializeUser: mockSerializeUser,
-  serializeUsers: mockSerializeUsers,
-}));
-
-const mockWithTransaction = jest.fn(async (fn: any) => {
-  const t = { LOCK: { UPDATE: 'UPDATE' } };
-  return fn(t as any);
-});
-jest.unstable_mockModule('../../utils/tx.js', () => ({
-  withTransaction: mockWithTransaction,
-}));
-
-const mockBuildUserWhere = jest.fn((q?: string, filters?: any) => {
-  const out: any = {};
-  if (q) out.q = q;
-  if (filters) out.filters = filters;
-  return out;
-});
-const mockNormalizeRoles = jest.fn((r?: any) =>
-  r == null ? [] : Array.isArray(r) ? r : [r]
-);
-jest.unstable_mockModule('../../queries/user.queries.js', () => ({
-  buildUserWhere: mockBuildUserWhere,
-  normalizeRoles: mockNormalizeRoles,
-}));
-
-class UniqueConstraintErrorShim extends Error {
-  constructor(message?: string) {
-    super(message);
-  }
-}
-const OpSymbols = {
-  in: Symbol.for('sequelize.in'),
-  and: Symbol.for('sequelize.and'),
-};
-jest.unstable_mockModule('sequelize', () => ({
-  Op: OpSymbols,
-  UniqueConstraintError: UniqueConstraintErrorShim,
-}));
-
-/** ---- Model method surfaces as plain jest.Mocks (kept as `any`) ---- */
-const UserModelFns: any = {
-  create: jest.fn(),
-  findByPk: jest.fn(),
-  findOne: jest.fn(),
-  findAndCountAll: jest.fn(),
-  destroy: jest.fn(),
-};
-
-const AuthorizationModelFns: any = {
-  findAll: jest.fn(),
-  findOne: jest.fn(),
-  create: jest.fn(),
-};
-
-jest.unstable_mockModule('../../models/user.model.js', () => ({
-  UserModel: UserModelFns,
-}));
-jest.unstable_mockModule('../../models/authorization.model.js', () => ({
-  AuthorizationModel: AuthorizationModelFns,
-}));
-
-/* ----------------------------- Load SUT after mocks ---------------------------- */
-const { UserService } = await import('../../services/user.service.js');
-const { UserModel } = await import('../../models/user.model.js');
-const { AuthorizationModel } = await import(
-  '../../models/authorization.model.js'
-);
-const { withTransaction } = await import('../../utils/tx.js');
-const { serializeUser, serializeUsers } = await import(
-  '../../serializers/user.serializer.js'
-);
-const { Op } = await import('sequelize');
-const { buildUserWhere, normalizeRoles } = await import(
-  '../../queries/user.queries.js'
-);
-
-/* --------------------------------- Helpers --------------------------------- */
 type MockUser = {
   userId: string;
   username: string;
@@ -119,7 +24,7 @@ type MockUser = {
 } & Record<string, unknown>;
 
 /** ✅ Fixed: data-backed instance with getters/setters so overrides & updates persist */
-const mkUser = (over: Partial<MockUser> = {}): MockUser => {
+function mkUser(over: Partial<MockUser> = {}): MockUser {
   // internal state (defaults + overrides)
   const data: any = {
     userId: 'u1',
@@ -162,17 +67,109 @@ const mkUser = (over: Partial<MockUser> = {}): MockUser => {
   inst.validatePassword = jest.fn(async (p: string) => p === 'current');
 
   return inst as MockUser;
-};
+}
+
+/* ========================= Mock setup ========================= */
+
+const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
+const mockWithTransaction = jest.fn(async (fn: any) => fn(fakeTx));
+
+const mockSerializeUser = jest.fn((u: any) => {
+  if (!u) return u;
+  const { password, ...rest } = u;
+  return rest;
+});
+
+const mockSerializeUsers = jest.fn((arr: any[]) =>
+  (arr || []).map((u) => {
+    if (!u) return u;
+    const { password, ...rest } = u;
+    return rest;
+  })
+);
+
+const mockBuildUserWhere = jest.fn((q?: string, filters?: any) => {
+  const out: any = {};
+  if (q) out.q = q;
+  if (filters) out.filters = filters;
+  return out;
+});
+
+const mockNormalizeRoles = jest.fn((r?: any) =>
+  r == null ? [] : Array.isArray(r) ? r : [r]
+);
+
+// Mock modules
+jest.mock('../../serializers/user.serializer.js', () => ({
+  serializeUser: mockSerializeUser,
+  serializeUsers: mockSerializeUsers,
+}));
+
+jest.mock('../../utils/tx.js', () => ({
+  withTransaction: mockWithTransaction,
+}));
+
+jest.mock('../../queries/user.queries.js', () => ({
+  buildUserWhere: mockBuildUserWhere,
+  normalizeRoles: mockNormalizeRoles,
+}));
+
+/* ========================= Import after mocks ========================= */
+
+import { UserService } from '../../services/user.service.js';
+import { UserModel } from '../../models/user.model.js';
+import { AuthorizationModel } from '../../models/authorization.model.js';
+import {
+  DuplicateError,
+  NotFoundError,
+  AuthError,
+} from '../../errors/index.js';
+
+/* ================================ Lifecycle ================================= */
 
 beforeEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+  mockWithTransaction.mockClear();
+  mockWithTransaction.mockImplementation(async (fn: any) => fn(fakeTx));
+  mockSerializeUser.mockClear();
+  mockSerializeUser.mockImplementation((u: any) => {
+    if (!u) return u;
+    const { password, ...rest } = u;
+    return rest;
+  });
+  mockSerializeUsers.mockClear();
+  mockSerializeUsers.mockImplementation((arr: any[]) =>
+    (arr || []).map((u) => {
+      if (!u) return u;
+      const { password, ...rest } = u;
+      return rest;
+    })
+  );
+  mockBuildUserWhere.mockClear();
+  mockBuildUserWhere.mockImplementation((q?: string, filters?: any) => {
+    const out: any = {};
+    if (q) out.q = q;
+    if (filters) out.filters = filters;
+    return out;
+  });
+  mockNormalizeRoles.mockClear();
+  mockNormalizeRoles.mockImplementation((r?: any) =>
+    r == null ? [] : Array.isArray(r) ? r : [r]
+  );
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
   jest.clearAllMocks();
 });
 
-/* ---------------------------------- CREATE ---------------------------------- */
+/* ================================= Tests ================================= */
+
 describe('UserService.create', () => {
   test('creates and serializes user', async () => {
     const inst = mkUser({ username: 'john', email: 'j@e.com' });
-    asMock(UserModel.create).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'create').mockResolvedValue(inst as any);
 
     const out = await UserService.create({
       username: 'john',
@@ -182,7 +179,7 @@ describe('UserService.create', () => {
       password: 'x',
     });
 
-    expect(withTransaction).toHaveBeenCalled();
+    expect(mockWithTransaction).toHaveBeenCalled();
     expect(UserModel.create).toHaveBeenCalledWith(
       {
         username: 'john',
@@ -191,17 +188,17 @@ describe('UserService.create', () => {
         email: 'j@e.com',
         password: 'x',
       },
-      expect.objectContaining({ transaction: expect.anything() })
+      expect.objectContaining({ transaction: fakeTx })
     );
-    expect(serializeUser).toHaveBeenCalledWith(inst.toJSON());
+    expect(mockSerializeUser).toHaveBeenCalledWith(inst.toJSON());
     expect(out).toMatchObject({ username: 'john', email: 'j@e.com' });
     expect((out as any).password).toBeUndefined();
   });
 
   test('UniqueConstraintError -> DuplicateError', async () => {
-    asMock(UserModel.create).mockRejectedValue(
-      new UniqueConstraintErrorShim('dup') as any
-    );
+    jest
+      .spyOn(UserModel, 'create')
+      .mockRejectedValue(new UniqueConstraintError({ message: 'dup' } as any));
 
     await expect(
       UserService.create({
@@ -215,20 +212,19 @@ describe('UserService.create', () => {
   });
 });
 
-/* ----------------------------------- READ ----------------------------------- */
 describe('UserService.getById / getByEmail / getByUsername', () => {
   test('getById returns serialized user', async () => {
     const inst = mkUser({ userId: 'u42' });
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
 
     const out = await UserService.getById('u42');
     expect(UserModel.findByPk).toHaveBeenCalledWith('u42');
-    expect(serializeUser).toHaveBeenCalledWith(inst.toJSON());
+    expect(mockSerializeUser).toHaveBeenCalledWith(inst.toJSON());
     expect(out).toMatchObject({ userId: 'u42' });
   });
 
   test('getById throws NotFoundError', async () => {
-    asMock(UserModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(null as any);
     await expect(UserService.getById('nope')).rejects.toBeInstanceOf(
       NotFoundError
     );
@@ -236,7 +232,7 @@ describe('UserService.getById / getByEmail / getByUsername', () => {
 
   test('getByEmail returns serialized user', async () => {
     const inst = mkUser({ email: 'x@y.z' });
-    asMock(UserModel.findOne).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findOne').mockResolvedValue(inst as any);
 
     const out = await UserService.getByEmail('x@y.z');
     expect(UserModel.findOne).toHaveBeenCalledWith({
@@ -246,7 +242,7 @@ describe('UserService.getById / getByEmail / getByUsername', () => {
   });
 
   test('getByEmail throws NotFoundError', async () => {
-    asMock(UserModel.findOne).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findOne').mockResolvedValue(null as any);
     await expect(UserService.getByEmail('none')).rejects.toBeInstanceOf(
       NotFoundError
     );
@@ -254,7 +250,7 @@ describe('UserService.getById / getByEmail / getByUsername', () => {
 
   test('getByUsername returns serialized user', async () => {
     const inst = mkUser({ username: 'alice' });
-    asMock(UserModel.findOne).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findOne').mockResolvedValue(inst as any);
 
     const out = await UserService.getByUsername('alice');
     expect(UserModel.findOne).toHaveBeenCalledWith({
@@ -264,25 +260,24 @@ describe('UserService.getById / getByEmail / getByUsername', () => {
   });
 
   test('getByUsername throws NotFoundError', async () => {
-    asMock(UserModel.findOne).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findOne').mockResolvedValue(null as any);
     await expect(UserService.getByUsername('ghost')).rejects.toBeInstanceOf(
       NotFoundError
     );
   });
 });
 
-/* ----------------------------------- LIST ----------------------------------- */
 describe('UserService.list', () => {
   test('lists users with pagination, no role filter', async () => {
-    asMock(buildUserWhere).mockReturnValue({ filters: { v: 1 } });
-    asMock(normalizeRoles).mockReturnValue([]);
+    mockBuildUserWhere.mockReturnValue({ filters: { v: 1 } });
+    mockNormalizeRoles.mockReturnValue([]);
 
     const rows = [mkUser({ userId: 'u1' }), mkUser({ userId: 'u2' })];
-    asMock(UserModel.findAndCountAll).mockResolvedValue({
+    jest.spyOn(UserModel, 'findAndCountAll').mockResolvedValue({
       rows,
       count: 42,
     } as any);
-    asMock(AuthorizationModel.findAll).mockResolvedValue([] as any);
+    jest.spyOn(AuthorizationModel, 'findAll').mockResolvedValue([] as any);
 
     const res = await UserService.list({
       page: 3,
@@ -292,14 +287,14 @@ describe('UserService.list', () => {
       orderDir: 'DESC',
     });
 
-    expect(buildUserWhere).toHaveBeenCalledWith('john', undefined);
+    expect(mockBuildUserWhere).toHaveBeenCalledWith('john', undefined);
     expect(UserModel.findAndCountAll).toHaveBeenCalledWith({
       where: { filters: { v: 1 } },
       limit: 10,
       offset: 20,
       order: [['createdAt', 'DESC']],
     });
-    expect(serializeUsers).toHaveBeenCalledWith(expect.any(Array));
+    expect(mockSerializeUsers).toHaveBeenCalledWith(expect.any(Array));
     expect(res.total).toBe(42);
     expect(res.page).toBe(3);
     expect(res.pageSize).toBe(10);
@@ -307,16 +302,16 @@ describe('UserService.list', () => {
   });
 
   test('applies authRole filter via AuthorizationModel → empty when no ids', async () => {
-    asMock(buildUserWhere).mockReturnValue({ base: true });
-    asMock(normalizeRoles).mockReturnValue(['administrator']);
-    asMock(AuthorizationModel.findAll).mockResolvedValue([] as any);
+    mockBuildUserWhere.mockReturnValue({ base: true });
+    mockNormalizeRoles.mockReturnValue(['administrator']);
+    jest.spyOn(AuthorizationModel, 'findAll').mockResolvedValue([] as any);
 
     const res = await UserService.list({ authRole: 'administrator' } as any);
 
     expect(AuthorizationModel.findAll).toHaveBeenCalledWith(
       expect.objectContaining({
         attributes: ['userId'],
-        where: expect.any(Object), // role: { [Op.in]: [...] }
+        where: expect.any(Object),
       })
     );
     expect(res).toEqual({
@@ -329,39 +324,38 @@ describe('UserService.list', () => {
   });
 
   test('attaches auth roles to returned users', async () => {
-    asMock(buildUserWhere).mockReturnValue({});
-    asMock(normalizeRoles).mockReturnValue([]);
+    mockBuildUserWhere.mockReturnValue({});
+    mockNormalizeRoles.mockReturnValue([]);
 
     const rows = [mkUser({ userId: 'a1' }), mkUser({ userId: 'a2' })];
-    asMock(UserModel.findAndCountAll).mockResolvedValue({
+    jest.spyOn(UserModel, 'findAndCountAll').mockResolvedValue({
       rows,
       count: 2,
     } as any);
-    asMock(AuthorizationModel.findAll).mockResolvedValue([
-      { userId: 'a2', role: 'employee' },
-    ] as any);
+    jest
+      .spyOn(AuthorizationModel, 'findAll')
+      .mockResolvedValue([{ userId: 'a2', role: 'employee' }] as any);
 
     const res = await UserService.list({ page: 1, pageSize: 5 });
 
-    const serializedInput = asMock(serializeUsers).mock.calls[0][0];
+    const serializedInput = mockSerializeUsers.mock.calls[0][0];
     const itemA2 = serializedInput.find((u: any) => u.userId === 'a2');
     expect(itemA2.authorization).toEqual({ role: 'employee' });
     expect(res.users.length).toBe(2);
   });
 });
 
-/* ---------------------------------- FILTER ---------------------------------- */
 describe('UserService.filter', () => {
   test('merges verified→filters and paginates', async () => {
-    asMock(buildUserWhere).mockReturnValue({ combined: true });
-    asMock(normalizeRoles).mockReturnValue([]);
+    mockBuildUserWhere.mockReturnValue({ combined: true });
+    mockNormalizeRoles.mockReturnValue([]);
 
     const rows = [mkUser({ userId: 'f1' })];
-    asMock(UserModel.findAndCountAll).mockResolvedValue({
+    jest.spyOn(UserModel, 'findAndCountAll').mockResolvedValue({
       rows,
       count: 1,
     } as any);
-    asMock(AuthorizationModel.findAll).mockResolvedValue([] as any);
+    jest.spyOn(AuthorizationModel, 'findAll').mockResolvedValue([] as any);
 
     const res = await UserService.filter({
       q: 'abc',
@@ -369,7 +363,7 @@ describe('UserService.filter', () => {
       pageSize: 5,
     } as any);
 
-    expect(buildUserWhere).toHaveBeenCalledWith('abc', { verified: true });
+    expect(mockBuildUserWhere).toHaveBeenCalledWith('abc', { verified: true });
     expect(UserModel.findAndCountAll).toHaveBeenCalledWith({
       where: { combined: true },
       limit: 5,
@@ -380,9 +374,9 @@ describe('UserService.filter', () => {
   });
 
   test('authRole inside filter → empty when no ids', async () => {
-    asMock(buildUserWhere).mockReturnValue({});
-    asMock(normalizeRoles).mockReturnValue(['user']);
-    asMock(AuthorizationModel.findAll).mockResolvedValue([] as any);
+    mockBuildUserWhere.mockReturnValue({});
+    mockNormalizeRoles.mockReturnValue(['user']);
+    jest.spyOn(AuthorizationModel, 'findAll').mockResolvedValue([] as any);
 
     const res = await UserService.filter({ authRole: ['user'] } as any);
     expect(res).toEqual({
@@ -395,11 +389,10 @@ describe('UserService.filter', () => {
   });
 });
 
-/* ---------------------------------- UPDATE ---------------------------------- */
 describe('UserService.update', () => {
   test('updates allowed fields and serializes', async () => {
     const inst = mkUser({ userId: 'u7' });
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
 
     const out = await UserService.update('u7', {
       username: 'newname',
@@ -412,7 +405,7 @@ describe('UserService.update', () => {
       'u7',
       expect.objectContaining({
         lock: 'UPDATE',
-        transaction: expect.any(Object),
+        transaction: fakeTx,
       })
     );
     expect(inst.set).toHaveBeenCalledWith({
@@ -427,7 +420,7 @@ describe('UserService.update', () => {
   });
 
   test('throws NotFoundError when user missing', async () => {
-    asMock(UserModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(null as any);
     await expect(
       UserService.update('missing', { username: 'x' })
     ).rejects.toBeInstanceOf(NotFoundError);
@@ -435,9 +428,9 @@ describe('UserService.update', () => {
 
   test('UniqueConstraintError -> DuplicateError on save', async () => {
     const inst = mkUser();
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
-    asMock(inst.save).mockRejectedValue(
-      new UniqueConstraintErrorShim('dup') as any
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
+    (inst.save as any).mockRejectedValue(
+      new UniqueConstraintError({ message: 'dup' } as any)
     );
 
     await expect(
@@ -446,11 +439,10 @@ describe('UserService.update', () => {
   });
 });
 
-/* -------------------------------- PASSWORD -------------------------------- */
 describe('UserService.changePassword', () => {
   test('changes password when current is valid', async () => {
     const inst = mkUser();
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
 
     const res = await UserService.changePassword('u1', {
       currentPassword: 'current',
@@ -465,7 +457,7 @@ describe('UserService.changePassword', () => {
 
   test('throws AuthError when current password is wrong', async () => {
     const inst = mkUser();
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
 
     await expect(
       UserService.changePassword('u1', {
@@ -476,7 +468,7 @@ describe('UserService.changePassword', () => {
   });
 
   test('throws NotFoundError when user missing', async () => {
-    asMock(UserModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(null as any);
     await expect(
       UserService.changePassword('nope', {
         currentPassword: 'x',
@@ -486,11 +478,10 @@ describe('UserService.changePassword', () => {
   });
 });
 
-/* -------------------------------- VERIFIED ------------------------------- */
 describe('UserService.setVerified', () => {
   test('sets verified flag', async () => {
     const inst = mkUser({ verified: false });
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
 
     const out = await UserService.setVerified('u1', true);
 
@@ -500,53 +491,53 @@ describe('UserService.setVerified', () => {
   });
 
   test('throws NotFoundError when user missing', async () => {
-    asMock(UserModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(null as any);
     await expect(UserService.setVerified('nope', true)).rejects.toBeInstanceOf(
       NotFoundError
     );
   });
 });
 
-/* --------------------------------- DELETE --------------------------------- */
 describe('UserService.delete', () => {
   test('deletes and returns success', async () => {
-    asMock(UserModel.destroy).mockResolvedValue(1 as any);
+    jest.spyOn(UserModel, 'destroy').mockResolvedValue(1 as any);
 
     const res = await UserService.delete('u1');
 
     expect(UserModel.destroy).toHaveBeenCalledWith({
       where: { userId: 'u1' },
-      transaction: expect.any(Object),
+      transaction: fakeTx,
     });
     expect(res).toEqual({ success: true });
   });
 
   test('throws NotFoundError when nothing deleted', async () => {
-    asMock(UserModel.destroy).mockResolvedValue(0 as any);
+    jest.spyOn(UserModel, 'destroy').mockResolvedValue(0 as any);
     await expect(UserService.delete('missing')).rejects.toBeInstanceOf(
       NotFoundError
     );
   });
 });
 
-/* ---------------------------------- ROLES ---------------------------------- */
 describe('UserService.setRole', () => {
   test('updates existing Authorization row', async () => {
     const inst = mkUser({ userId: 'u1' });
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
 
     const existing = {
       userId: 'u1',
       role: 'user',
       save: jest.fn(async () => {}),
     };
-    asMock(AuthorizationModel.findOne).mockResolvedValue(existing as any);
+    jest
+      .spyOn(AuthorizationModel, 'findOne')
+      .mockResolvedValue(existing as any);
 
     const out = await UserService.setRole('u1', 'administrator');
 
     expect(AuthorizationModel.findOne).toHaveBeenCalledWith({
       where: { userId: 'u1' },
-      transaction: expect.any(Object),
+      transaction: fakeTx,
       lock: 'UPDATE',
     });
     expect(existing.role).toBe('administrator');
@@ -556,21 +547,23 @@ describe('UserService.setRole', () => {
 
   test('creates Authorization row when missing', async () => {
     const inst = mkUser({ userId: 'u2' });
-    asMock(UserModel.findByPk).mockResolvedValue(inst as any);
-    asMock(AuthorizationModel.findOne).mockResolvedValue(null as any);
-    asMock(AuthorizationModel.create).mockResolvedValue(undefined as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(inst as any);
+    jest.spyOn(AuthorizationModel, 'findOne').mockResolvedValue(null as any);
+    jest
+      .spyOn(AuthorizationModel, 'create')
+      .mockResolvedValue(undefined as any);
 
     const out = await UserService.setRole('u2', 'employee');
 
     expect(AuthorizationModel.create).toHaveBeenCalledWith(
       { userId: 'u2', role: 'employee' },
-      { transaction: expect.any(Object) }
+      { transaction: fakeTx }
     );
     expect(out.authorization).toEqual({ role: 'employee' });
   });
 
   test('throws NotFoundError when user missing', async () => {
-    asMock(UserModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(UserModel, 'findByPk').mockResolvedValue(null as any);
     await expect(UserService.setRole('nope', 'user')).rejects.toBeInstanceOf(
       NotFoundError
     );

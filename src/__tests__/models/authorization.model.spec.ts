@@ -6,15 +6,7 @@
  * - Nettoyage FK-safe entre tests via cleanAllTables().
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  expect,
-  beforeAll,
-  afterAll,
-  afterEach,
-} from '@jest/globals';
+
 
 import { ValidationError, UniqueConstraintError } from 'sequelize';
 

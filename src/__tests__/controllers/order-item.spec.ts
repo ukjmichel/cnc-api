@@ -1,46 +1,13 @@
+// src/__tests__/controllers/order-item.controller.spec.ts
+
 /**
  * OrderItemsController — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeEach,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
 import type { Request, Response, NextFunction } from 'express';
 
-import { BadRequestError, NotFoundError } from '../../errors/index.js';
-
-// ----------------------------- ESM-safe mocks -----------------------------
-
-// Service layer mocks (exported as a module before importing SUT)
-const svc = {
-  create: jest.fn(),
-  createMany: jest.fn(),
-  listByOrder: jest.fn(),
-  getOne: jest.fn(),
-  update: jest.fn(),
-  remove: jest.fn(),
-  filter: jest.fn(),
-};
-
-await jest.unstable_mockModule('../../services/order-item.service.js', () => ({
-  orderItemService: svc,
-}));
-
-// SUT (controller) AFTER module mocks
-const { OrderItemsController } = await import(
-  '../../controllers/order-item.controller.js'
-);
-
-// Static import for model (we'll spy on it)
-import { OrderModel } from '../../models/order.model.js';
-
-// ----------------------------- helpers -----------------------------------
+/* ================================ Helpers ================================= */
 
 function makeRes() {
   const res: Partial<Response> & { statusCode?: number; body?: any } = {};
@@ -59,10 +26,48 @@ function makeNext() {
   return jest.fn() as unknown as NextFunction & jest.Mock;
 }
 
-// ----------------------------- lifecycle ---------------------------------
+/* ========================= Mock setup ========================= */
+
+// Service layer mocks
+const mockCreate = jest.fn();
+const mockCreateMany = jest.fn();
+const mockListByOrder = jest.fn();
+const mockGetOne = jest.fn();
+const mockUpdate = jest.fn();
+const mockRemove = jest.fn();
+const mockFilter = jest.fn();
+
+// Mock modules
+jest.mock('../../services/order-item.service.js', () => ({
+  orderItemService: {
+    create: mockCreate,
+    createMany: mockCreateMany,
+    listByOrder: mockListByOrder,
+    getOne: mockGetOne,
+    update: mockUpdate,
+    remove: mockRemove,
+    filter: mockFilter,
+  },
+}));
+
+/* ========================= Import after mocks ========================= */
+
+import { OrderItemsController } from '../../controllers/order-item.controller.js';
+import { OrderModel } from '../../models/order.model.js';
+import { BadRequestError, NotFoundError } from '../../errors/index.js';
+
+/* ================================ Lifecycle ================================= */
 
 beforeEach(() => {
+  jest.restoreAllMocks();
   jest.clearAllMocks();
+  mockCreate.mockClear();
+  mockCreateMany.mockClear();
+  mockListByOrder.mockClear();
+  mockGetOne.mockClear();
+  mockUpdate.mockClear();
+  mockRemove.mockClear();
+  mockFilter.mockClear();
 });
 
 afterEach(() => {
@@ -70,7 +75,7 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
-// ----------------------------- tests -------------------------------------
+/* ================================= Tests ================================= */
 
 describe('OrderItemsController.create', () => {
   test('201 → ensures order exists, injects orderId, delegates to service, returns { data: { item } }', async () => {
@@ -83,18 +88,18 @@ describe('OrderItemsController.create', () => {
     const next = makeNext();
 
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue({} as any);
-    svc.create.mockImplementation(async () => ({
+    mockCreate.mockResolvedValue({
       orderId: 'ORD-1',
       stockId: 'S1',
       quantity: '1.250',
       unitPrice: '2.00',
       lineTotal: '2.50',
-    }));
+    });
 
     await OrderItemsController.create(req, res, next);
 
     expect(OrderModel.findByPk).toHaveBeenCalledWith('ORD-1');
-    expect(svc.create).toHaveBeenCalledWith(
+    expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         orderId: 'ORD-1',
         stockId: 'S1',
@@ -188,12 +193,12 @@ describe('OrderItemsController.createMany', () => {
         lineTotal: '1.50',
       },
     ];
-    svc.createMany.mockImplementation(async () => created);
+    mockCreateMany.mockResolvedValue(created);
 
     await OrderItemsController.createMany(req, res, next);
 
     expect(OrderModel.findByPk).toHaveBeenCalledWith('ORD-2');
-    expect(svc.createMany).toHaveBeenCalledWith([
+    expect(mockCreateMany).toHaveBeenCalledWith([
       {
         orderId: 'ORD-2',
         stockId: 'S1',
@@ -283,18 +288,17 @@ describe('OrderItemsController.listForOrder', () => {
     const next = makeNext();
 
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue({} as any);
-    svc.listByOrder.mockImplementation(async () => ({
+    mockListByOrder.mockResolvedValue({
       items: [{ orderId: 'ORD-3', stockId: 'S1' }],
       total: 7,
       page: 2,
       pageSize: 5,
       pages: 2,
-    }));
+    });
 
     await OrderItemsController.listForOrder(req, res, next);
 
-    const callArg = (svc.listByOrder as unknown as jest.Mock).mock
-      .calls[0][1] as any; // <-- cast to any to avoid 'unknown'
+    const callArg = mockListByOrder.mock.calls[0][1] as any;
 
     expect(callArg.page).toBe(2);
     expect(callArg.pageSize).toBe(5);
@@ -346,14 +350,14 @@ describe('OrderItemsController.getOne', () => {
     const next = makeNext();
 
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue({} as any);
-    svc.getOne.mockImplementation(async () => ({
+    mockGetOne.mockResolvedValue({
       orderId: 'ORD-4',
       stockId: 'S9',
-    }));
+    });
 
     await OrderItemsController.getOne(req, res, next);
 
-    expect(svc.getOne).toHaveBeenCalledWith('ORD-4', 'S9');
+    expect(mockGetOne).toHaveBeenCalledWith('ORD-4', 'S9');
     expect(res.body?.data?.item?.stockId).toBe('S9');
   });
 
@@ -381,17 +385,17 @@ describe('OrderItemsController.update', () => {
     const next = makeNext();
 
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue({} as any);
-    svc.update.mockImplementation(async () => ({
+    mockUpdate.mockResolvedValue({
       orderId: 'ORD-5',
       stockId: 'S1',
       quantity: '2.500',
       unitPrice: '3.00',
       lineTotal: '7.50',
-    }));
+    });
 
     await OrderItemsController.update(req, res, next);
 
-    expect(svc.update).toHaveBeenCalledWith('ORD-5', 'S1', req.body);
+    expect(mockUpdate).toHaveBeenCalledWith('ORD-5', 'S1', req.body);
     expect(res.body?.data?.item?.lineTotal).toBe('7.50');
   });
 
@@ -421,11 +425,11 @@ describe('OrderItemsController.remove', () => {
     const next = makeNext();
 
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue({} as any);
-    svc.remove.mockImplementation(async () => ({ deleted: true }));
+    mockRemove.mockResolvedValue({ deleted: true });
 
     await OrderItemsController.remove(req, res, next);
 
-    expect(svc.remove).toHaveBeenCalledWith('ORD-6', 'S1');
+    expect(mockRemove).toHaveBeenCalledWith('ORD-6', 'S1');
     expect(res.body?.data).toEqual({ deleted: true });
   });
 
@@ -467,18 +471,17 @@ describe('OrderItemsController.filter', () => {
     const res = makeRes();
     const next = makeNext();
 
-    svc.filter.mockImplementation(async () => ({
+    mockFilter.mockResolvedValue({
       items: [{ orderId: 'ORD-9', stockId: 'S9' }],
       total: 11,
       page: 3,
       pageSize: 10,
       pages: 2,
-    }));
+    });
 
     await OrderItemsController.filter(req, res, next);
 
-    const callArg = (svc.filter as unknown as jest.Mock).mock
-      .calls[0][0] as any; // <-- cast
+    const callArg = mockFilter.mock.calls[0][0] as any;
 
     expect(callArg.page).toBe(3);
     expect(callArg.pageSize).toBe(10);

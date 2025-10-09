@@ -2,11 +2,35 @@
 import path from 'node:path';
 import swaggerJSDoc from 'swagger-jsdoc';
 
+const isTest = process.env.NODE_ENV === 'test';
 const isProd = process.env.NODE_ENV === 'production';
 const root = process.cwd();
 
 // Helper function to safely create swagger spec
 const createSwaggerSpec = () => {
+  // Skip full Swagger initialization in test environment
+  // This prevents swagger-jsdoc from parsing all TypeScript files during Jest runs
+  if (isTest) {
+    return {
+      openapi: '3.0.3',
+      info: {
+        title: 'CNC API',
+        version: '1.0.0',
+        description: 'API documentation (disabled in test mode)',
+      },
+      paths: {},
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+          },
+        },
+      },
+    };
+  }
+
   try {
     const apiPaths = isProd
       ? [
@@ -65,6 +89,15 @@ const createSwaggerSpec = () => {
         description: 'API documentation temporarily unavailable',
       },
       paths: {},
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+          },
+        },
+      },
     };
   }
 };

@@ -5,15 +5,6 @@
  * - Accepts common body keys: refreshToken | refresh_token | token
  * - Tries POST /api/auth/refresh first, then GET fallback, then /api/auth/refresh-token
  */
-import 'reflect-metadata';
-import {
-  describe,
-  it,
-  expect,
-  beforeAll,
-  afterAll,
-  afterEach,
-} from '@jest/globals';
 import request from 'supertest';
 import { app } from '../../app.js';
 import { sequelize } from '../../db/sequelize.js';

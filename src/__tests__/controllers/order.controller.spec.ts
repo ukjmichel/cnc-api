@@ -1,26 +1,14 @@
+// src/__tests__/controllers/order.controller.spec.ts
+
 /**
  * OrderController — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeEach,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
-import type { Request, Response, NextFunction } from 'express';
 import { Op } from 'sequelize';
+import type { Request, Response, NextFunction } from 'express';
 
-import { OrderController } from '../../controllers/order.controller.js';
-import { OrderService } from '../../services/order.service.js';
-import { OrderItemModel } from '../../models/order-item.model.js';
-import { StockModel } from '../../models/stock.model.js';
-import { BadRequestError, NotFoundError } from '../../errors/index.js';
-
-/* -------------------------------- helpers -------------------------------- */
+/* ================================ Helpers ================================= */
 
 function makeRes() {
   const res: Partial<Response> & { statusCode?: number; body?: any } = {};
@@ -57,17 +45,27 @@ function mkStockRow(json: any) {
   } as any;
 }
 
-/* -------------------------------- lifecycle ------------------------------ */
+/* ========================= Import modules ========================= */
+
+import { OrderController } from '../../controllers/order.controller.js';
+import { OrderService } from '../../services/order.service.js';
+import { OrderItemModel } from '../../models/order-item.model.js';
+import { StockModel } from '../../models/stock.model.js';
+import { BadRequestError, NotFoundError } from '../../errors/index.js';
+
+/* ================================ Lifecycle ================================= */
 
 beforeEach(() => {
-  jest.resetAllMocks();
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
+  jest.clearAllMocks();
 });
 
-/* --------------------------------- tests --------------------------------- */
+/* ================================= Tests ================================= */
 
 describe('OrderController.create', () => {
   test('201 → calls service and returns { data: { order } }', async () => {

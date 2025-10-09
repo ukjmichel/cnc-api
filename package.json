@@ -8,8 +8,8 @@
     "build": "cross-env NODE_ENV=production tsc",
     "start": "node dist/server.js",
     "start:pm2": "cross-env NODE_ENV=production pm2-runtime dist/server.js --name api",
-    "test": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
-    "test:coverage": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand --coverage --coverageReporters=text-summary,lcov"
+    "test": "cross-env NODE_ENV=test jest",
+    "test:coverage": "cross-env NODE_ENV=test jest --coverage"
   },
   "keywords": [],
   "author": "",

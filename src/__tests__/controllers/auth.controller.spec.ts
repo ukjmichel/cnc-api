@@ -1,10 +1,27 @@
 // src/__tests__/controllers/auth.controller.spec.ts
-import 'reflect-metadata';
-import { jest, describe, test, beforeEach, expect } from '@jest/globals';
 
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
+/**
+ * AuthController — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
+ */
 
-/* ============================ Mocks (before imports) ============================ */
+/* ================================ Helpers ================================= */
+
+function makeRes() {
+  const res: any = {};
+  res.cookie = jest.fn(() => res);
+  res.clearCookie = jest.fn(() => res);
+  res.status = jest.fn(() => res);
+  res.json = jest.fn(() => res);
+  res.send = jest.fn(() => res);
+  return res;
+}
+
+function makeNext() {
+  return jest.fn();
+}
+
+/* ========================= Mock setup ========================= */
 
 const mockCookieSpec = {
   ACCESS_COOKIE: 'at',
@@ -13,51 +30,44 @@ const mockCookieSpec = {
   refreshCookieOpts: { httpOnly: true, path: '/', sameSite: 'lax' as const },
 };
 
-const AuthServiceMock = {
-  cookieSpec: jest.fn(() => mockCookieSpec),
-  register: jest.fn(),
-  login: jest.fn(),
-  refresh: jest.fn(),
-};
-jest.unstable_mockModule('../../services/auth.service.js', () => ({
-  AuthService: AuthServiceMock,
+const mockCookieSpecFn = jest.fn(() => mockCookieSpec);
+const mockRegister = jest.fn();
+const mockLogin = jest.fn();
+const mockRefresh = jest.fn();
+
+// Mock modules
+jest.mock('../../services/auth.service.js', () => ({
+  AuthService: {
+    cookieSpec: mockCookieSpecFn,
+    register: mockRegister,
+    login: mockLogin,
+    refresh: mockRefresh,
+  },
 }));
 
-const AuthorizationModelMock = {
-  findOne: jest.fn(),
-};
-jest.unstable_mockModule('../../models/authorization.model.js', () => ({
-  AuthorizationModel: AuthorizationModelMock,
-}));
+/* ========================= Import after mocks ========================= */
 
-/* ============================ Load SUT after mocks ============================ */
+import { AuthController } from '../../controllers/auth.controller.js';
+import { AuthorizationModel } from '../../models/authorization.model.js';
 
-const { AuthController } = await import('../../controllers/auth.controller.js');
-const { AuthService } = await import('../../services/auth.service.js');
-const { AuthorizationModel } = await import(
-  '../../models/authorization.model.js'
-);
-
-/* ================================= Helpers ================================= */
-
-const makeRes = () => {
-  const res: any = {};
-  res.cookie = jest.fn(() => res);
-  res.clearCookie = jest.fn(() => res);
-  res.status = jest.fn(() => res);
-  res.json = jest.fn(() => res);
-  res.send = jest.fn(() => res);
-  return res;
-};
-
-const makeNext = () => jest.fn();
-
-/* ================================== Tests ================================== */
+/* ================================ Lifecycle ================================= */
 
 beforeEach(() => {
+  jest.restoreAllMocks();
   jest.clearAllMocks();
-  asMock(AuthService.cookieSpec).mockReturnValue(mockCookieSpec);
+  mockCookieSpecFn.mockClear();
+  mockCookieSpecFn.mockReturnValue(mockCookieSpec);
+  mockRegister.mockClear();
+  mockLogin.mockClear();
+  mockRefresh.mockClear();
 });
+
+afterEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+});
+
+/* ================================= Tests ================================= */
 
 describe('AuthController.register', () => {
   test('sets cookies and returns user + authorization (201)', async () => {
@@ -74,15 +84,17 @@ describe('AuthController.register', () => {
     const next = makeNext();
 
     const user = { userId: 'u1', username: 'alice' };
-    asMock(AuthService.register).mockResolvedValue({
+    mockRegister.mockResolvedValue({
       user,
       tokens: { accessToken: 'AT', refreshToken: 'RT' },
     });
-    asMock(AuthorizationModel.findOne).mockResolvedValue({ role: 'user' });
+    jest
+      .spyOn(AuthorizationModel, 'findOne')
+      .mockResolvedValue({ role: 'user' } as any);
 
     await AuthController.register(req, res, next);
 
-    expect(AuthService.register).toHaveBeenCalledWith(req.body);
+    expect(mockRegister).toHaveBeenCalledWith(req.body);
     expect(res.cookie).toHaveBeenCalledWith(
       mockCookieSpec.ACCESS_COOKIE,
       'AT',
@@ -112,7 +124,7 @@ describe('AuthController.register', () => {
     const next = makeNext();
 
     const boom = new Error('boom');
-    asMock(AuthService.register).mockRejectedValue(boom);
+    mockRegister.mockRejectedValue(boom);
 
     await AuthController.register(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -126,15 +138,17 @@ describe('AuthController.login', () => {
     const next = makeNext();
 
     const user = { userId: 'u2', username: 'alice' };
-    asMock(AuthService.login).mockResolvedValue({
+    mockLogin.mockResolvedValue({
       user,
       tokens: { accessToken: 'AT2', refreshToken: 'RT2' },
     });
-    asMock(AuthorizationModel.findOne).mockResolvedValue({ role: 'employee' });
+    jest
+      .spyOn(AuthorizationModel, 'findOne')
+      .mockResolvedValue({ role: 'employee' } as any);
 
     await AuthController.login(req, res, next);
 
-    expect(AuthService.login).toHaveBeenCalledWith(req.body);
+    expect(mockLogin).toHaveBeenCalledWith(req.body);
     expect(res.cookie).toHaveBeenCalledWith(
       mockCookieSpec.ACCESS_COOKIE,
       'AT2',
@@ -158,7 +172,7 @@ describe('AuthController.login', () => {
     const next = makeNext();
     const boom = new Error('nope');
 
-    asMock(AuthService.login).mockRejectedValue(boom);
+    mockLogin.mockRejectedValue(boom);
 
     await AuthController.login(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -172,18 +186,18 @@ describe('AuthController.refresh', () => {
     const next = makeNext();
 
     const user = { userId: 'u3', username: 'carol' };
-    asMock(AuthService.refresh).mockResolvedValue({
+    mockRefresh.mockResolvedValue({
       user,
       accessToken: 'NEW_AT',
       refreshToken: 'NEW_RT',
     });
-    asMock(AuthorizationModel.findOne).mockResolvedValue({
+    jest.spyOn(AuthorizationModel, 'findOne').mockResolvedValue({
       role: 'administrator',
-    });
+    } as any);
 
     await AuthController.refresh(req, res, next);
 
-    expect(AuthService.refresh).toHaveBeenCalledWith('OLD_RT');
+    expect(mockRefresh).toHaveBeenCalledWith('OLD_RT');
     expect(res.cookie).toHaveBeenCalledWith(
       mockCookieSpec.ACCESS_COOKIE,
       'NEW_AT',
@@ -210,7 +224,7 @@ describe('AuthController.refresh', () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ message: 'No refresh token' });
-    expect(AuthService.refresh).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -220,7 +234,7 @@ describe('AuthController.refresh', () => {
     const next = makeNext();
     const boom = new Error('bad refresh');
 
-    asMock(AuthService.refresh).mockRejectedValue(boom);
+    mockRefresh.mockRejectedValue(boom);
     await AuthController.refresh(req, res, next);
 
     expect(next).toHaveBeenCalledWith(boom);
@@ -257,7 +271,7 @@ describe('AuthController.logout', () => {
     const next = makeNext();
 
     // simulate throw inside logout
-    asMock(AuthService.cookieSpec).mockImplementation(() => {
+    mockCookieSpecFn.mockImplementation(() => {
       throw new Error('cookie fail');
     });
 
@@ -279,7 +293,9 @@ describe('AuthController.me', () => {
   test('returns current user + authorization (200)', async () => {
     const req: any = { user: { userId: 'u9', username: 'zoe' } };
     const res = makeRes();
-    asMock(AuthorizationModel.findOne).mockResolvedValue({ role: 'user' });
+    jest
+      .spyOn(AuthorizationModel, 'findOne')
+      .mockResolvedValue({ role: 'user' } as any);
 
     await AuthController.me(req, res);
 

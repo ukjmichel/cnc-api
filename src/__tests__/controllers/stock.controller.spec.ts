@@ -1,25 +1,13 @@
+// src/__tests__/controllers/stock.controller.spec.ts
+
 /**
  * StockController — unit tests (pure Jest mocks, no DB)
+ * @jest-environment node
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeEach,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
 import type { Request, Response, NextFunction } from 'express';
 
-import { StockController } from '../../controllers/stock.controller.js';
-import { StockService } from '../../services/stock.service.js';
-import * as StockQueries from '../../queries/stock.queries.js';
-import { sequelize } from '../../db/sequelize.js';
-import { BadRequestError } from '../../errors/index.js';
-
-/* ----------------------------- helpers ----------------------------- */
+/* ================================ Helpers ================================= */
 
 function makeRes() {
   const res: Partial<Response> & { statusCode?: number; body?: any } = {};
@@ -57,15 +45,27 @@ function mkLot(overrides: Partial<Record<string, any>> = {}) {
   };
 }
 
+/* ========================= Import modules ========================= */
+
+import { StockController } from '../../controllers/stock.controller.js';
+import { StockService } from '../../services/stock.service.js';
+import * as StockQueries from '../../queries/stock.queries.js';
+import { sequelize } from '../../db/sequelize.js';
+import { BadRequestError } from '../../errors/index.js';
+
+/* ================================ Lifecycle ================================= */
+
 beforeEach(() => {
-  jest.resetAllMocks();
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
+  jest.clearAllMocks();
 });
 
-/* ------------------------------- tests ------------------------------ */
+/* ================================= Tests ================================= */
 
 describe('StockController.adjust', () => {
   test('200 → calls service in a transaction and returns result', async () => {
@@ -236,7 +236,7 @@ describe('StockController.list', () => {
     const res = makeRes();
     const next = makeNext();
 
-    // Use the real builder (don’t spy on ESM namespace)
+    // Use the real builder (don't spy on ESM namespace)
     const built = StockQueries.buildStockListQuery(req.query as any);
 
     const listSpy = jest.spyOn(StockService, 'list').mockResolvedValue({

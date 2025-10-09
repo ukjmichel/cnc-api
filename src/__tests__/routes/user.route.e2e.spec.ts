@@ -6,8 +6,6 @@
  * - Creates unique, model-valid usernames inline (^[a-z0-9]{2,20}$)
  */
 
-import 'reflect-metadata';
-import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';

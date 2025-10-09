@@ -1,74 +1,112 @@
 // src/__tests__/controllers/product.controller.spec.ts
-import 'reflect-metadata';
-import { jest, describe, test, beforeEach, expect } from '@jest/globals';
 
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
+/**
+ * ProductController — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
+ */
 
-/* ============================== Mocks (before imports) ============================== */
 
-const ProductServiceMock = {
-  create: jest.fn(),
-  getById: jest.fn(),
-  getByCode: jest.fn(),
-  list: jest.fn(),
-  filter: jest.fn(),
-  update: jest.fn(),
-  delete: jest.fn(),
-};
-jest.unstable_mockModule('../../services/product.service.js', () => ({
-  ProductService: ProductServiceMock,
-}));
+/* ================================ Helpers ================================= */
 
-const serializeProductMock = jest.fn((p: any) => ({ __s: true, ...p }));
-const serializeProductsMock = jest.fn((arr: any[]) =>
-  (arr || []).map((p) => ({ __s: true, ...p }))
-);
-jest.unstable_mockModule('../../serializers/product.serializer.js', () => ({
-  serializeProduct: serializeProductMock,
-  serializeProducts: serializeProductsMock,
-}));
-
-const buildListQueryMock = jest.fn((q: Record<string, unknown>) => ({
-  __built: 'list',
-  ...q,
-}));
-const buildFilterQueryMock = jest.fn((q: Record<string, unknown>) => ({
-  __built: 'filter',
-  ...q,
-}));
-jest.unstable_mockModule('../../queries/product.queries.js', () => ({
-  buildProductListQuery: buildListQueryMock,
-  buildProductFilterQuery: buildFilterQueryMock,
-}));
-
-/* ============================== Load SUT after mocks ============================== */
-
-const { ProductController } = await import(
-  '../../controllers/product.controller.js'
-);
-const { ProductService } = await import('../../services/product.service.js');
-const { serializeProduct, serializeProducts } = await import(
-  '../../serializers/product.serializer.js'
-);
-const { buildProductListQuery, buildProductFilterQuery } = await import(
-  '../../queries/product.queries.js'
-);
-
-/* ================================== Helpers ================================== */
-
-const makeRes = () => {
+function makeRes() {
   const res: any = {};
   res.status = jest.fn(() => res);
   res.json = jest.fn(() => res);
   return res;
-};
-const makeNext = () => jest.fn();
+}
 
-/* ================================== Tests ================================== */
+function makeNext() {
+  return jest.fn();
+}
+
+/* ========================= Mock setup ========================= */
+
+const mockCreate = jest.fn();
+const mockGetById = jest.fn();
+const mockGetByCode = jest.fn();
+const mockList = jest.fn();
+const mockFilter = jest.fn();
+const mockUpdate = jest.fn();
+const mockDelete = jest.fn();
+
+const mockSerializeProduct = jest.fn((p: any) => ({ __s: true, ...p }));
+const mockSerializeProducts = jest.fn((arr: any[]) =>
+  (arr || []).map((p) => ({ __s: true, ...p }))
+);
+
+const mockBuildListQuery = jest.fn((q: Record<string, unknown>) => ({
+  __built: 'list',
+  ...q,
+}));
+
+const mockBuildFilterQuery = jest.fn((q: Record<string, unknown>) => ({
+  __built: 'filter',
+  ...q,
+}));
+
+// Mock modules
+jest.mock('../../services/product.service.js', () => ({
+  ProductService: {
+    create: mockCreate,
+    getById: mockGetById,
+    getByCode: mockGetByCode,
+    list: mockList,
+    filter: mockFilter,
+    update: mockUpdate,
+    delete: mockDelete,
+  },
+}));
+
+jest.mock('../../serializers/product.serializer.js', () => ({
+  serializeProduct: mockSerializeProduct,
+  serializeProducts: mockSerializeProducts,
+}));
+
+jest.mock('../../queries/product.queries.js', () => ({
+  buildProductListQuery: mockBuildListQuery,
+  buildProductFilterQuery: mockBuildFilterQuery,
+}));
+
+/* ========================= Import after mocks ========================= */
+
+import { ProductController } from '../../controllers/product.controller.js';
+
+/* ================================ Lifecycle ================================= */
 
 beforeEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+  mockCreate.mockClear();
+  mockGetById.mockClear();
+  mockGetByCode.mockClear();
+  mockList.mockClear();
+  mockFilter.mockClear();
+  mockUpdate.mockClear();
+  mockDelete.mockClear();
+  mockSerializeProduct.mockClear();
+  mockSerializeProduct.mockImplementation((p: any) => ({ __s: true, ...p }));
+  mockSerializeProducts.mockClear();
+  mockSerializeProducts.mockImplementation((arr: any[]) =>
+    (arr || []).map((p) => ({ __s: true, ...p }))
+  );
+  mockBuildListQuery.mockClear();
+  mockBuildListQuery.mockImplementation((q: Record<string, unknown>) => ({
+    __built: 'list',
+    ...q,
+  }));
+  mockBuildFilterQuery.mockClear();
+  mockBuildFilterQuery.mockImplementation((q: Record<string, unknown>) => ({
+    __built: 'filter',
+    ...q,
+  }));
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
   jest.clearAllMocks();
 });
+
+/* ================================= Tests ================================= */
 
 describe('ProductController.create', () => {
   test('201 + serialized product', async () => {
@@ -84,12 +122,12 @@ describe('ProductController.create', () => {
     const next = makeNext();
 
     const created = { productId: 'EAN:123', productName: 'Sparkling Water' };
-    asMock(ProductService.create).mockResolvedValue(created);
+    mockCreate.mockResolvedValue(created);
 
     await ProductController.create(req, res, next);
 
-    expect(ProductService.create).toHaveBeenCalledWith(req.body);
-    expect(serializeProduct).toHaveBeenCalledWith(created);
+    expect(mockCreate).toHaveBeenCalledWith(req.body);
+    expect(mockSerializeProduct).toHaveBeenCalledWith(created);
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith({
       data: { product: { __s: true, ...created } },
@@ -103,7 +141,7 @@ describe('ProductController.create', () => {
     const next = makeNext();
     const boom = new Error('oops');
 
-    asMock(ProductService.create).mockRejectedValue(boom);
+    mockCreate.mockRejectedValue(boom);
 
     await ProductController.create(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -117,12 +155,12 @@ describe('ProductController.getById', () => {
     const next = makeNext();
 
     const found = { productId: 'P1', productName: 'Name' };
-    asMock(ProductService.getById).mockResolvedValue(found);
+    mockGetById.mockResolvedValue(found);
 
     await ProductController.getById(req, res, next);
 
-    expect(ProductService.getById).toHaveBeenCalledWith('P1');
-    expect(serializeProduct).toHaveBeenCalledWith(found);
+    expect(mockGetById).toHaveBeenCalledWith('P1');
+    expect(mockSerializeProduct).toHaveBeenCalledWith(found);
     expect(res.json).toHaveBeenCalledWith({
       data: { product: { __s: true, ...found } },
     });
@@ -135,7 +173,7 @@ describe('ProductController.getById', () => {
     const next = makeNext();
     const boom = new Error('not found');
 
-    asMock(ProductService.getById).mockRejectedValue(boom);
+    mockGetById.mockRejectedValue(boom);
 
     await ProductController.getById(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -154,7 +192,7 @@ describe('ProductController.getByCode', () => {
     expect(res.json).toHaveBeenCalledWith({
       message: 'productCode query param is required',
     });
-    expect(ProductService.getByCode).not.toHaveBeenCalled();
+    expect(mockGetByCode).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -164,12 +202,12 @@ describe('ProductController.getByCode', () => {
     const next = makeNext();
 
     const found = { productId: 'P2', productCode: 'ABC-123' };
-    asMock(ProductService.getByCode).mockResolvedValue(found);
+    mockGetByCode.mockResolvedValue(found);
 
     await ProductController.getByCode(req, res, next);
 
-    expect(ProductService.getByCode).toHaveBeenCalledWith('abc-123');
-    expect(serializeProduct).toHaveBeenCalledWith(found);
+    expect(mockGetByCode).toHaveBeenCalledWith('abc-123');
+    expect(mockSerializeProduct).toHaveBeenCalledWith(found);
     expect(res.json).toHaveBeenCalledWith({
       data: { product: { __s: true, ...found } },
     });
@@ -182,7 +220,7 @@ describe('ProductController.getByCode', () => {
     const next = makeNext();
     const boom = new Error('nope');
 
-    asMock(ProductService.getByCode).mockRejectedValue(boom);
+    mockGetByCode.mockRejectedValue(boom);
     await ProductController.getByCode(req, res, next);
 
     expect(next).toHaveBeenCalledWith(boom);
@@ -196,7 +234,7 @@ describe('ProductController.list', () => {
     const next = makeNext();
 
     const rows = [{ productId: 'L1' }, { productId: 'L2' }];
-    asMock(ProductService.list).mockResolvedValue({
+    mockList.mockResolvedValue({
       products: rows,
       total: 42,
       page: 3,
@@ -206,11 +244,11 @@ describe('ProductController.list', () => {
 
     await ProductController.list(req, res, next);
 
-    expect(buildProductListQuery).toHaveBeenCalledWith(req.query);
-    expect(ProductService.list).toHaveBeenCalledWith(
+    expect(mockBuildListQuery).toHaveBeenCalledWith(req.query);
+    expect(mockList).toHaveBeenCalledWith(
       expect.objectContaining({ __built: 'list' })
     );
-    expect(serializeProducts).toHaveBeenCalledWith(rows as any);
+    expect(mockSerializeProducts).toHaveBeenCalledWith(rows as any);
     expect(res.json).toHaveBeenCalledWith({
       data: { products: rows.map((r) => ({ __s: true, ...r })) },
       meta: { total: 42, page: 3, pageSize: 10, pages: 5 },
@@ -224,7 +262,7 @@ describe('ProductController.list', () => {
     const next = makeNext();
     const boom = new Error('bad list');
 
-    asMock(ProductService.list).mockRejectedValue(boom);
+    mockList.mockRejectedValue(boom);
 
     await ProductController.list(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -240,7 +278,7 @@ describe('ProductController.filter', () => {
     const next = makeNext();
 
     const rows = [{ productId: 'F1' }];
-    asMock(ProductService.filter).mockResolvedValue({
+    mockFilter.mockResolvedValue({
       products: rows,
       total: 1,
       page: 1,
@@ -250,11 +288,11 @@ describe('ProductController.filter', () => {
 
     await ProductController.filter(req, res, next);
 
-    expect(buildProductFilterQuery).toHaveBeenCalledWith(req.query);
-    expect(ProductService.filter).toHaveBeenCalledWith(
+    expect(mockBuildFilterQuery).toHaveBeenCalledWith(req.query);
+    expect(mockFilter).toHaveBeenCalledWith(
       expect.objectContaining({ __built: 'filter' })
     );
-    expect(serializeProducts).toHaveBeenCalledWith(rows as any);
+    expect(mockSerializeProducts).toHaveBeenCalledWith(rows as any);
     expect(res.json).toHaveBeenCalledWith({
       data: { products: rows.map((r) => ({ __s: true, ...r })) },
       meta: { total: 1, page: 1, pageSize: 20, pages: 1 },
@@ -268,7 +306,7 @@ describe('ProductController.filter', () => {
     const next = makeNext();
     const boom = new Error('bad filter');
 
-    asMock(ProductService.filter).mockRejectedValue(boom);
+    mockFilter.mockRejectedValue(boom);
 
     await ProductController.filter(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -285,12 +323,12 @@ describe('ProductController.update', () => {
     const next = makeNext();
 
     const updated = { productId: 'U1', productName: 'NewName' };
-    asMock(ProductService.update).mockResolvedValue(updated);
+    mockUpdate.mockResolvedValue(updated);
 
     await ProductController.update(req, res, next);
 
-    expect(ProductService.update).toHaveBeenCalledWith('U1', req.body);
-    expect(serializeProduct).toHaveBeenCalledWith(updated);
+    expect(mockUpdate).toHaveBeenCalledWith('U1', req.body);
+    expect(mockSerializeProduct).toHaveBeenCalledWith(updated);
     expect(res.json).toHaveBeenCalledWith({
       data: { product: { __s: true, ...updated } },
     });
@@ -303,7 +341,7 @@ describe('ProductController.update', () => {
     const next = makeNext();
     const boom = new Error('nope');
 
-    asMock(ProductService.update).mockRejectedValue(boom);
+    mockUpdate.mockRejectedValue(boom);
 
     await ProductController.update(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);
@@ -316,11 +354,11 @@ describe('ProductController.remove', () => {
     const res = makeRes();
     const next = makeNext();
 
-    asMock((ProductService as any).delete).mockResolvedValue({ success: true });
+    mockDelete.mockResolvedValue({ success: true });
 
     await ProductController.remove(req, res, next);
 
-    expect((ProductService as any).delete).toHaveBeenCalledWith('D1');
+    expect(mockDelete).toHaveBeenCalledWith('D1');
     expect(res.json).toHaveBeenCalledWith({ data: { success: true } });
     expect(next).not.toHaveBeenCalled();
   });
@@ -331,7 +369,7 @@ describe('ProductController.remove', () => {
     const next = makeNext();
     const boom = new Error('delete fail');
 
-    asMock((ProductService as any).delete).mockRejectedValue(boom);
+    mockDelete.mockRejectedValue(boom);
 
     await ProductController.remove(req, res, next);
     expect(next).toHaveBeenCalledWith(boom);

@@ -4,7 +4,7 @@
  * OrderItem Routes
  * =============================================================================
  * Nested under `/api/orders/:orderId/items` for order-specific operations.
- * Also includes `/api/order-items` for global filtering/search.
+ * Global filter endpoint `/api/order-items` is mounted directly in app.ts
  *
  * Swagger:
  *  - All endpoints are secured with Bearer auth (see global security).
@@ -16,7 +16,7 @@
 import { Router } from 'express';
 import { OrderItemsController } from '../controllers/order-item.controller.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
-import { requireOrderOwnerOrStaff } from '../middlewares/requireOrderOwnerOrStaff.js'; // <- fixed stray space
+import { requireOrderOwnerOrStaff } from '../middlewares/requireOrderOwnerOrStaff.js';
 
 import {
   vCreateOrderItem,
@@ -25,7 +25,6 @@ import {
   vGetOne,
   vUpdateOrderItem,
   vRemoveOrderItem,
-  vGlobalFilter,
 } from '../validators/order-item.validators.js';
 
 const orderItemsNestedRouter = Router({ mergeParams: true });
@@ -37,7 +36,7 @@ const orderItemsNestedRouter = Router({ mergeParams: true });
  *     summary: Create a single order item
  *     description: >
  *       Create (or merge) an item in an order. If the same `(orderId, stockId)` exists,
- *       the quantity will be merged. If `unitPrice` is omitted, it defaults to the stock’s current price.
+ *       the quantity will be merged. If `unitPrice` is omitted, it defaults to the stock's current price.
  *     tags: [Order Items]
  *     security:
  *       - bearerAuth: []
@@ -371,90 +370,6 @@ orderItemsNestedRouter.delete(
   OrderItemsController.remove
 );
 
-/**
- * @swagger
- * /api/order-items:
- *   get:
- *     summary: Global filter/search order items
- *     description: >
- *       Filter order items across all orders with optional ranges and sort/pagination.
- *     tags: [Order Items]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: orderId
- *         schema: { type: string }
- *       - in: query
- *         name: stockId
- *         schema: { type: string }
- *       - in: query
- *         name: productId
- *         schema: { type: string }
- *       - in: query
- *         name: createdFrom
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: createdTo
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: quantityMin
- *         schema: { type: number }
- *       - in: query
- *         name: quantityMax
- *         schema: { type: number }
- *       - in: query
- *         name: unitPriceMin
- *         schema: { type: number }
- *       - in: query
- *         name: unitPriceMax
- *         schema: { type: number }
- *       - in: query
- *         name: lineTotalMin
- *         schema: { type: number }
- *       - in: query
- *         name: lineTotalMax
- *         schema: { type: number }
- *       - in: query
- *         name: page
- *         schema: { type: integer, minimum: 1, default: 1 }
- *       - in: query
- *         name: pageSize
- *         schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
- *       - in: query
- *         name: orderBy
- *         schema:
- *           type: string
- *           enum: [createdAt, updatedAt, quantity, unitPrice, lineTotal]
- *       - in: query
- *         name: orderDir
- *         schema:
- *           type: string
- *           enum: [ASC, DESC]
- *     responses:
- *       200:
- *         description: Paginated results
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PaginatedOrderItems'
- *       401:
- *         description: Unauthorized
- */
-/**
- * Global filter/search
- * NOTE: This path looks odd when mounted as a nested router.
- * Prefer wiring this on your top-level api router:
- *   app.get('/api/order-items', requireAuth, vGlobalFilter, OrderItemsController.filter)
- * If you keep it here, make sure the mount path results in /api/order-items.
- */
-orderItemsNestedRouter.get(
-  '/../../order-items',
-  requireAuth,
-  vGlobalFilter,
-  OrderItemsController.filter
-);
-
 export default orderItemsNestedRouter;
 
 /**
@@ -557,4 +472,76 @@ export default orderItemsNestedRouter;
  *           type: array
  *           items:
  *             type: object
+ */
+
+/**
+ * @swagger
+ * /api/order-items:
+ *   get:
+ *     summary: Global filter/search order items
+ *     description: >
+ *       Filter order items across all orders with optional ranges and sort/pagination.
+ *       This endpoint is mounted in app.ts at the root level, not in the nested router.
+ *     tags: [Order Items]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: orderId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: stockId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: productId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: createdFrom
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: createdTo
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: quantityMin
+ *         schema: { type: number }
+ *       - in: query
+ *         name: quantityMax
+ *         schema: { type: number }
+ *       - in: query
+ *         name: unitPriceMin
+ *         schema: { type: number }
+ *       - in: query
+ *         name: unitPriceMax
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lineTotalMin
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lineTotalMax
+ *         schema: { type: number }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: pageSize
+ *         schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+ *       - in: query
+ *         name: orderBy
+ *         schema:
+ *           type: string
+ *           enum: [createdAt, updatedAt, quantity, unitPrice, lineTotal]
+ *       - in: query
+ *         name: orderDir
+ *         schema:
+ *           type: string
+ *           enum: [ASC, DESC]
+ *     responses:
+ *       200:
+ *         description: Paginated results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PaginatedOrderItems'
+ *       401:
+ *         description: Unauthorized
  */

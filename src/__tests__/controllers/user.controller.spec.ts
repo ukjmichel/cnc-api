@@ -1,136 +1,175 @@
-import 'reflect-metadata';
-import { jest } from '@jest/globals';
+// src/__tests__/controllers/user.controller.spec.ts
 
-/* tiny helper so TS stops inferring `never` on jest.fn() */
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
+/**
+ * UserController — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
+ */
 
-/* ===================== Mocks (must be defined BEFORE imports) ===================== */
+/* ================================ Helpers ================================= */
 
-/** serializers used by controller */
-const mockSerializeUserForResponse = jest.fn((u: any) => u);
-const mockSerializeUsers = jest.fn((arr: any[]) => arr);
+function makeRes() {
+  const res: any = {};
+  res.status = jest.fn(() => res);
+  res.json = jest.fn(() => res);
+  return res;
+}
 
+function makeNext() {
+  return jest.fn();
+}
 
-jest.unstable_mockModule('../../serializers/user.serializer.js', () => ({
+/* ========================= Mock setup ========================= */
+
+const mockGetById = jest.fn();
+const mockGetByEmail = jest.fn();
+const mockGetByUsername = jest.fn();
+const mockList = jest.fn();
+const mockFilter = jest.fn();
+const mockUpdate = jest.fn();
+const mockChangePassword = jest.fn();
+const mockSetVerified = jest.fn();
+const mockDelete = jest.fn();
+const mockSetRole = jest.fn();
+
+const mockSerializeUserForResponse = jest.fn((u: any) => ({ __s: true, ...u }));
+const mockSerializeUsers = jest.fn((arr: any[]) =>
+  (arr || []).map((u) => ({ __s: true, ...u }))
+);
+
+const mockBuildUserListQuery = jest.fn((q: Record<string, unknown>) => ({
+  __built: 'list',
+  ...q,
+}));
+
+const mockBuildUserFilterQuery = jest.fn((q: Record<string, unknown>) => ({
+  __built: 'filter',
+  ...q,
+}));
+
+const mockUserModelCreate = jest.fn();
+const mockAuthorizationModelCreate = jest.fn();
+const mockAuthorizationModelDestroy = jest.fn();
+
+const mockTransaction = jest.fn(async (cb: (t: any) => any) => cb({}));
+
+// Mock modules
+jest.mock('../../services/user.service.js', () => ({
+  UserService: {
+    getById: mockGetById,
+    getByEmail: mockGetByEmail,
+    getByUsername: mockGetByUsername,
+    list: mockList,
+    filter: mockFilter,
+    update: mockUpdate,
+    changePassword: mockChangePassword,
+    setVerified: mockSetVerified,
+    delete: mockDelete,
+    setRole: mockSetRole,
+  },
+}));
+
+jest.mock('../../serializers/user.serializer.js', () => ({
   serializeUserForResponse: mockSerializeUserForResponse,
   serializeUsers: mockSerializeUsers,
 }));
 
-/** query builders used by list/filter */
-const mockBuildUserListQuery = jest.fn((q: any) => ({
-  ...q,
-  normalized: true,
-}));
-const mockBuildUserFilterQuery = jest.fn((q: any) => ({
-  ...q,
-  normalized: true,
-  filtered: true,
-}));
-
-jest.unstable_mockModule('../../queries/user.queries.js', () => ({
+jest.mock('../../queries/user.queries.js', () => ({
   buildUserListQuery: mockBuildUserListQuery,
   buildUserFilterQuery: mockBuildUserFilterQuery,
 }));
 
-/** UserService surface used by controller */
-const mockUserService = {
-  getById: jest.fn(),
-  getByEmail: jest.fn(),
-  getByUsername: jest.fn(),
-  list: jest.fn(),
-  filter: jest.fn(),
-  update: jest.fn(),
-  changePassword: jest.fn(),
-  setVerified: jest.fn(),
-  delete: jest.fn(),
-  setRole: jest.fn(),
-};
-
-jest.unstable_mockModule('../../services/user.service.js', () => ({
-  UserService: mockUserService,
+jest.mock('../../models/user.model.js', () => ({
+  UserModel: {
+    create: mockUserModelCreate,
+  },
 }));
 
-/** Sequelize instance used only for .transaction in create/createEmployee */
-const mockSequelize = {
-  transaction: jest.fn(async (cb: (t: any) => any) => cb({})),
-};
-jest.unstable_mockModule('../../db/sequelize.js', () => ({
-  sequelize: mockSequelize,
+jest.mock('../../models/authorization.model.js', () => ({
+  AuthorizationModel: {
+    create: mockAuthorizationModelCreate,
+    destroy: mockAuthorizationModelDestroy,
+  },
 }));
 
-/** Models used directly in controller for create/createEmployee/remove cleanup */
-const mockUserModel = {
-  create: jest.fn(),
-};
-const mockAuthorizationModel = {
-  create: jest.fn(),
-  destroy: jest.fn(),
-};
-jest.unstable_mockModule('../../models/user.model.js', () => ({
-  UserModel: mockUserModel,
-}));
-jest.unstable_mockModule('../../models/authorization.model.js', () => ({
-  AuthorizationModel: mockAuthorizationModel,
+jest.mock('../../db/sequelize.js', () => ({
+  sequelize: {
+    transaction: mockTransaction,
+  },
 }));
 
-/* ===================== Load SUT after all mocks ===================== */
-const { UserController } = await import('../../controllers/user.controller.js');
-const { UserService } = await import('../../services/user.service.js');
-const { sequelize } = await import('../../db/sequelize.js');
-const { UserModel } = await import('../../models/user.model.js');
-const { AuthorizationModel } = await import(
-  '../../models/authorization.model.js'
-);
-const { serializeUserForResponse, serializeUsers } = await import(
-  '../../serializers/user.serializer.js'
-);
-const { buildUserListQuery, buildUserFilterQuery } = await import(
-  '../../queries/user.queries.js'
-);
+/* ========================= Import after mocks ========================= */
 
-/* ============================== Test helpers =============================== */
-type MockRes = {
-  statusCode?: number;
-  body?: any;
-  status: jest.Mock;
-  json: jest.Mock;
-};
-const makeRes = (): MockRes => {
-  const res: any = {};
-  res.statusCode = 200;
-  res.status = jest.fn(function (code: number) {
-    res.statusCode = code;
-    return res;
-  });
-  res.json = jest.fn(function (payload: any) {
-    res.body = payload;
-    return res;
-  });
-  return res as MockRes;
-};
-const makeNext = () => jest.fn();
+import { UserController } from '../../controllers/user.controller.js';
 
-/* basic user shape for responses */
-const mkUser = (over: Partial<any> = {}) => ({
-  userId: 'u1',
-  username: 'john',
-  firstName: 'John',
-  lastName: 'Doe',
-  email: 'j@e.com',
-  verified: false,
-  authorization: null,
-  ...over,
+/* ================================ Lifecycle ================================= */
+
+function mkUser(over: Partial<any> = {}) {
+  return {
+    userId: 'u1',
+    username: 'john',
+    firstName: 'John',
+    lastName: 'Doe',
+    email: 'j@e.com',
+    verified: false,
+    authorization: null,
+    ...over,
+  };
+}
+
+beforeEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+
+  mockGetById.mockClear();
+  mockGetByEmail.mockClear();
+  mockGetByUsername.mockClear();
+  mockList.mockClear();
+  mockFilter.mockClear();
+  mockUpdate.mockClear();
+  mockChangePassword.mockClear();
+  mockSetVerified.mockClear();
+  mockDelete.mockClear();
+  mockSetRole.mockClear();
+
+  mockSerializeUserForResponse.mockClear();
+  mockSerializeUserForResponse.mockImplementation((u: any) => ({
+    __s: true,
+    ...u,
+  }));
+  mockSerializeUsers.mockClear();
+  mockSerializeUsers.mockImplementation((arr: any[]) =>
+    (arr || []).map((u) => ({ __s: true, ...u }))
+  );
+
+  mockBuildUserListQuery.mockClear();
+  mockBuildUserListQuery.mockImplementation((q: Record<string, unknown>) => ({
+    __built: 'list',
+    ...q,
+  }));
+  mockBuildUserFilterQuery.mockClear();
+  mockBuildUserFilterQuery.mockImplementation((q: Record<string, unknown>) => ({
+    __built: 'filter',
+    ...q,
+  }));
+
+  mockUserModelCreate.mockClear();
+  mockAuthorizationModelCreate.mockClear();
+  mockAuthorizationModelDestroy.mockClear();
+  mockTransaction.mockClear();
+  mockTransaction.mockImplementation(async (cb: (t: any) => any) => cb({}));
 });
 
-/* reset between tests */
-beforeEach(() => {
+afterEach(() => {
+  jest.restoreAllMocks();
   jest.clearAllMocks();
 });
+
+/* ================================= Tests ================================= */
 
 /* ================================= CREATE ================================= */
 
 describe('UserController.create', () => {
-  test('creates user + default role=user in a transaction, returns 201', async () => {
+  test('201 + creates user with default role=user in transaction', async () => {
     const req: any = {
       body: {
         username: 'alice',
@@ -143,18 +182,17 @@ describe('UserController.create', () => {
     const res = makeRes();
     const next = makeNext();
 
-    // model create returns instance-like object with toJSON
     const created = mkUser({ userId: 'ua', email: 'alice@mail.com' });
-    asMock(UserModel.create).mockResolvedValue({
+    mockUserModelCreate.mockResolvedValue({
       toJSON: () => ({ ...created }),
       userId: 'ua',
-    } as any);
-    asMock(AuthorizationModel.create).mockResolvedValue(undefined);
+    });
+    mockAuthorizationModelCreate.mockResolvedValue(undefined);
 
-    await UserController.create(req, res as any, next);
+    await UserController.create(req, res, next);
 
-    expect(sequelize.transaction).toHaveBeenCalled();
-    expect(UserModel.create).toHaveBeenCalledWith(
+    expect(mockTransaction).toHaveBeenCalled();
+    expect(mockUserModelCreate).toHaveBeenCalledWith(
       {
         username: 'alice',
         firstName: 'Alice',
@@ -164,22 +202,39 @@ describe('UserController.create', () => {
       },
       expect.objectContaining({ transaction: expect.any(Object) })
     );
-    expect(AuthorizationModel.create).toHaveBeenCalledWith(
+    expect(mockAuthorizationModelCreate).toHaveBeenCalledWith(
       { userId: 'ua', role: 'user' },
       expect.objectContaining({ transaction: expect.any(Object) })
     );
     expect(res.status).toHaveBeenCalledWith(201);
-    expect(serializeUserForResponse).toHaveBeenCalled();
-    expect(res.body.data.user).toMatchObject({
-      userId: 'ua',
-      authorization: { role: 'user' },
+    expect(mockSerializeUserForResponse).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({
+      data: {
+        user: expect.objectContaining({
+          __s: true,
+          userId: 'ua',
+        }),
+      },
     });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { body: {} };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('transaction failed');
+
+    mockTransaction.mockRejectedValue(boom);
+
+    await UserController.create(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.createEmployee', () => {
-  test('creates user + role=employee in a transaction, returns 201', async () => {
+  test('201 + creates user with role=employee in transaction', async () => {
     const req: any = {
       body: {
         username: 'bob',
@@ -193,162 +248,273 @@ describe('UserController.createEmployee', () => {
     const next = makeNext();
 
     const created = mkUser({ userId: 'ub', email: 'bob@mail.com' });
-    asMock(UserModel.create).mockResolvedValue({
+    mockUserModelCreate.mockResolvedValue({
       toJSON: () => ({ ...created }),
       userId: 'ub',
-    } as any);
-    asMock(AuthorizationModel.create).mockResolvedValue(undefined);
+    });
+    mockAuthorizationModelCreate.mockResolvedValue(undefined);
 
-    await UserController.createEmployee(req, res as any, next);
+    await UserController.createEmployee(req, res, next);
 
-    expect(sequelize.transaction).toHaveBeenCalled();
-    expect(AuthorizationModel.create).toHaveBeenCalledWith(
+    expect(mockTransaction).toHaveBeenCalled();
+    expect(mockAuthorizationModelCreate).toHaveBeenCalledWith(
       { userId: 'ub', role: 'employee' },
       expect.objectContaining({ transaction: expect.any(Object) })
     );
     expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.body.data.user.authorization).toEqual({ role: 'employee' });
+    expect(res.json).toHaveBeenCalledWith({
+      data: {
+        user: expect.objectContaining({
+          __s: true,
+          userId: 'ub',
+        }),
+      },
+    });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { body: {} };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('transaction failed');
+
+    mockTransaction.mockRejectedValue(boom);
+
+    await UserController.createEmployee(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 /* ================================= READS ================================== */
 
 describe('UserController.getById', () => {
-  test('returns 200 with serialized user', async () => {
+  test('200 + serialized user', async () => {
     const req: any = { params: { id: 'u42' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.getById).mockResolvedValue(mkUser({ userId: 'u42' }));
+    const found = mkUser({ userId: 'u42' });
+    mockGetById.mockResolvedValue(found);
 
-    await UserController.getById(req, res as any, next);
+    await UserController.getById(req, res, next);
 
-    expect(UserService.getById).toHaveBeenCalledWith('u42');
-    expect(serializeUserForResponse).toHaveBeenCalled();
-    expect(res.body.data.user.userId).toBe('u42');
+    expect(mockGetById).toHaveBeenCalledWith('u42');
+    expect(mockSerializeUserForResponse).toHaveBeenCalledWith(found);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { user: { __s: true, ...found } },
+    });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { params: { id: 'nope' } };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('not found');
+
+    mockGetById.mockRejectedValue(boom);
+
+    await UserController.getById(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.getByEmail', () => {
-  test('returns 200 with serialized user', async () => {
+  test('200 + serialized user', async () => {
     const req: any = { query: { email: 'x@y.z' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.getByEmail).mockResolvedValue(
-      mkUser({ email: 'x@y.z' })
-    );
+    const found = mkUser({ email: 'x@y.z' });
+    mockGetByEmail.mockResolvedValue(found);
 
-    await UserController.getByEmail(req, res as any, next);
+    await UserController.getByEmail(req, res, next);
 
-    expect(UserService.getByEmail).toHaveBeenCalledWith('x@y.z');
-    expect(serializeUserForResponse).toHaveBeenCalled();
-    expect(res.body.data.user.email).toBe('x@y.z');
+    expect(mockGetByEmail).toHaveBeenCalledWith('x@y.z');
+    expect(mockSerializeUserForResponse).toHaveBeenCalledWith(found);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { user: { __s: true, ...found } },
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { query: { email: 'bad' } };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('not found');
+
+    mockGetByEmail.mockRejectedValue(boom);
+
+    await UserController.getByEmail(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.getByUsername', () => {
-  test('returns 200 with serialized user', async () => {
+  test('200 + serialized user', async () => {
     const req: any = { query: { username: 'alice' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.getByUsername).mockResolvedValue(
-      mkUser({ username: 'alice' })
-    );
+    const found = mkUser({ username: 'alice' });
+    mockGetByUsername.mockResolvedValue(found);
 
-    await UserController.getByUsername(req, res as any, next);
+    await UserController.getByUsername(req, res, next);
 
-    expect(UserService.getByUsername).toHaveBeenCalledWith('alice');
-    expect(serializeUserForResponse).toHaveBeenCalled();
-    expect(res.body.data.user.username).toBe('alice');
+    expect(mockGetByUsername).toHaveBeenCalledWith('alice');
+    expect(mockSerializeUserForResponse).toHaveBeenCalledWith(found);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { user: { __s: true, ...found } },
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { query: { username: 'bad' } };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('not found');
+
+    mockGetByUsername.mockRejectedValue(boom);
+
+    await UserController.getByUsername(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 /* =============================== LIST & FILTER ============================== */
 
 describe('UserController.list', () => {
-  test('builds query, calls service, normalizes collection + meta', async () => {
+  test('200 + serialized array + meta', async () => {
     const req: any = {
       query: { q: 'john', page: '2', pageSize: '5', role: 'employee' },
     };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.list).mockResolvedValue({
-      users: [mkUser({ userId: 'u1' }), mkUser({ userId: 'u2' })],
+    const rows = [mkUser({ userId: 'u1' }), mkUser({ userId: 'u2' })];
+    mockList.mockResolvedValue({
+      users: rows,
       total: 12,
       page: 2,
       pageSize: 5,
       pages: 3,
     });
 
-    await UserController.list(req, res as any, next);
+    await UserController.list(req, res, next);
 
-    expect(buildUserListQuery).toHaveBeenCalledWith(req.query);
-    expect(UserService.list).toHaveBeenCalledWith(
-      expect.objectContaining({ normalized: true })
+    expect(mockBuildUserListQuery).toHaveBeenCalledWith(req.query);
+    expect(mockList).toHaveBeenCalledWith(
+      expect.objectContaining({ __built: 'list' })
     );
-    expect(serializeUsers).toHaveBeenCalled();
-    expect(res.body.data.users).toHaveLength(2);
-    expect(res.body.meta).toEqual({
-      total: 12,
-      page: 2,
-      pageSize: 5,
-      pages: 3,
+    expect(mockSerializeUsers).toHaveBeenCalledWith(rows);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { users: rows.map((r) => ({ __s: true, ...r })) },
+      meta: { total: 12, page: 2, pageSize: 5, pages: 3 },
     });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { query: {} };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('bad list');
+
+    mockList.mockRejectedValue(boom);
+
+    await UserController.list(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.filter', () => {
-  test('builds filter query, calls service, normalizes collection + meta', async () => {
+  test('200 + serialized array + meta', async () => {
     const req: any = { query: { q: 'a', verified: 'true', authRole: 'user' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.filter).mockResolvedValue({
-      users: [mkUser({ userId: 'f1' })],
+    const rows = [mkUser({ userId: 'f1' })];
+    mockFilter.mockResolvedValue({
+      users: rows,
       total: 1,
       page: 1,
       pageSize: 20,
       pages: 1,
     });
 
-    await UserController.filter(req, res as any, next);
+    await UserController.filter(req, res, next);
 
-    expect(buildUserFilterQuery).toHaveBeenCalledWith(req.query);
-    expect(UserService.filter).toHaveBeenCalledWith(
-      expect.objectContaining({ filtered: true })
+    expect(mockBuildUserFilterQuery).toHaveBeenCalledWith(req.query);
+    expect(mockFilter).toHaveBeenCalledWith(
+      expect.objectContaining({ __built: 'filter' })
     );
-    expect(serializeUsers).toHaveBeenCalled();
-    expect(res.body.data.users[0].userId).toBe('f1');
+    expect(mockSerializeUsers).toHaveBeenCalledWith(rows);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { users: rows.map((r) => ({ __s: true, ...r })) },
+      meta: { total: 1, page: 1, pageSize: 20, pages: 1 },
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { query: {} };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('bad filter');
+
+    mockFilter.mockRejectedValue(boom);
+
+    await UserController.filter(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 /* ================================ MUTATIONS ================================= */
 
 describe('UserController.update', () => {
-  test('calls service.update and returns serialized user', async () => {
+  test('200 + serialized user', async () => {
     const req: any = { params: { id: 'u7' }, body: { username: 'new' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.update).mockResolvedValue(
-      mkUser({ userId: 'u7', username: 'new' })
-    );
+    const updated = mkUser({ userId: 'u7', username: 'new' });
+    mockUpdate.mockResolvedValue(updated);
 
-    await UserController.update(req, res as any, next);
+    await UserController.update(req, res, next);
 
-    expect(UserService.update).toHaveBeenCalledWith('u7', { username: 'new' });
-    expect(serializeUserForResponse).toHaveBeenCalled();
-    expect(res.body.data.user.username).toBe('new');
+    expect(mockUpdate).toHaveBeenCalledWith('u7', { username: 'new' });
+    expect(mockSerializeUserForResponse).toHaveBeenCalledWith(updated);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { user: { __s: true, ...updated } },
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { params: { id: 'u7' }, body: {} };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('update failed');
+
+    mockUpdate.mockRejectedValue(boom);
+
+    await UserController.update(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.changePassword', () => {
-  test('calls service.changePassword and returns success', async () => {
+  test('200 + success', async () => {
     const req: any = {
       params: { id: 'u1' },
       body: { currentPassword: 'a', newPassword: 'b' },
@@ -356,52 +522,95 @@ describe('UserController.changePassword', () => {
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.changePassword).mockResolvedValue({ success: true });
+    mockChangePassword.mockResolvedValue({ success: true });
 
-    await UserController.changePassword(req, res as any, next);
+    await UserController.changePassword(req, res, next);
 
-    expect(UserService.changePassword).toHaveBeenCalledWith('u1', {
+    expect(mockChangePassword).toHaveBeenCalledWith('u1', {
       currentPassword: 'a',
       newPassword: 'b',
     });
-    expect(res.body.data).toEqual({ success: true });
+    expect(res.json).toHaveBeenCalledWith({ data: { success: true } });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { params: { id: 'u1' }, body: {} };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('password change failed');
+
+    mockChangePassword.mockRejectedValue(boom);
+
+    await UserController.changePassword(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.setVerified', () => {
-  test('calls service.setVerified and returns serialized user', async () => {
+  test('200 + serialized user', async () => {
     const req: any = { params: { id: 'u1' }, body: { verified: true } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.setVerified).mockResolvedValue(
-      mkUser({ userId: 'u1', verified: true })
-    );
+    const updated = mkUser({ userId: 'u1', verified: true });
+    mockSetVerified.mockResolvedValue(updated);
 
-    await UserController.setVerified(req, res as any, next);
+    await UserController.setVerified(req, res, next);
 
-    expect(UserService.setVerified).toHaveBeenCalledWith('u1', true);
-    expect(serializeUserForResponse).toHaveBeenCalled();
-    expect(res.body.data.user.verified).toBe(true);
+    expect(mockSetVerified).toHaveBeenCalledWith('u1', true);
+    expect(mockSerializeUserForResponse).toHaveBeenCalledWith(updated);
+    expect(res.json).toHaveBeenCalledWith({
+      data: { user: { __s: true, ...updated } },
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { params: { id: 'u1' }, body: { verified: true } };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('set verified failed');
+
+    mockSetVerified.mockRejectedValue(boom);
+
+    await UserController.setVerified(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
 describe('UserController.remove', () => {
-  test('deletes via service, cleans up authorization, returns success', async () => {
+  test('200 + success + cleanup authorization', async () => {
     const req: any = { params: { id: 'ux' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.delete).mockResolvedValue({ success: true });
-    asMock(AuthorizationModel.destroy).mockResolvedValue(1 as any);
+    mockDelete.mockResolvedValue({ success: true });
+    mockAuthorizationModelDestroy.mockResolvedValue(1);
 
-    await UserController.remove(req, res as any, next);
+    await UserController.remove(req, res, next);
 
-    expect(UserService.delete).toHaveBeenCalledWith('ux');
-    expect(AuthorizationModel.destroy).toHaveBeenCalledWith({
+    expect(mockDelete).toHaveBeenCalledWith('ux');
+    expect(mockAuthorizationModelDestroy).toHaveBeenCalledWith({
       where: { userId: 'ux' },
     });
-    expect(res.body.data).toEqual({ success: true });
+    expect(res.json).toHaveBeenCalledWith({ data: { success: true } });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('on error -> next(err)', async () => {
+    const req: any = { params: { id: 'ux' } };
+    const res = makeRes();
+    const next = makeNext();
+    const boom = new Error('delete failed');
+
+    mockDelete.mockRejectedValue(boom);
+
+    await UserController.remove(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
 
@@ -411,53 +620,42 @@ describe('UserController.setRole', () => {
     const res = makeRes();
     const next = makeNext();
 
-    await UserController.setRole(req, res as any, next);
+    await UserController.setRole(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.body).toEqual({ error: 'Invalid role' });
-    expect(UserService.setRole).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid role' });
+    expect(mockSetRole).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
   });
 
-  test('delegates to service and returns user with authorization', async () => {
+  test('200 + user with authorization', async () => {
     const req: any = { params: { id: 'u1' }, body: { role: 'employee' } };
     const res = makeRes();
     const next = makeNext();
 
-    asMock(UserService.setRole).mockResolvedValue(
-      mkUser({ userId: 'u1', authorization: { role: 'employee' } })
-    );
+    const updated = mkUser({
+      userId: 'u1',
+      authorization: { role: 'employee' },
+    });
+    mockSetRole.mockResolvedValue(updated);
 
-    await UserController.setRole(req, res as any, next);
+    await UserController.setRole(req, res, next);
 
-    expect(UserService.setRole).toHaveBeenCalledWith('u1', 'employee');
-    expect(res.body.data.user.authorization).toEqual({ role: 'employee' });
-  });
-});
-
-/* ============================== error path smoke ============================= */
-
-describe('UserController error paths', () => {
-  test('create bubbles to next on error', async () => {
-    const req: any = { body: {} };
-    const res = makeRes();
-    const next = makeNext();
-
-    asMock(sequelize.transaction).mockRejectedValueOnce(new Error('boom'));
-
-    await UserController.create(req, res as any, next);
-
-    expect(next).toHaveBeenCalledWith(expect.any(Error));
+    expect(mockSetRole).toHaveBeenCalledWith('u1', 'employee');
+    expect(res.json).toHaveBeenCalledWith({ data: { user: updated } });
+    expect(next).not.toHaveBeenCalled();
   });
 
-  test('getById bubbles to next on error', async () => {
-    const req: any = { params: { id: 'u1' } };
+  test('on error -> next(err)', async () => {
+    const req: any = { params: { id: 'u1' }, body: { role: 'employee' } };
     const res = makeRes();
     const next = makeNext();
+    const boom = new Error('set role failed');
 
-    asMock(UserService.getById).mockRejectedValueOnce(new Error('nope'));
+    mockSetRole.mockRejectedValue(boom);
 
-    await UserController.getById(req, res as any, next);
+    await UserController.setRole(req, res, next);
 
-    expect(next).toHaveBeenCalledWith(expect.any(Error));
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });

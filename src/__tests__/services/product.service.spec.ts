@@ -1,79 +1,14 @@
 // src/__tests__/services/product.service.spec.ts
-import 'reflect-metadata';
-import { jest, describe, test, beforeEach, expect } from '@jest/globals';
 
-const asMock = (fn: unknown) => fn as jest.MockedFunction<any>;
+/**
+ * ProductService — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
+ */
 
-/* ========================= Mocks (must be before imports) ========================= */
+import { Op, UniqueConstraintError } from 'sequelize';
 
-class UniqueConstraintErrorShim extends Error {
-  constructor(message?: string) {
-    super(message);
-    this.name = 'UniqueConstraintError';
-  }
-}
-const OpSymbols = {
-  and: Symbol.for('sequelize.and'),
-  or: Symbol.for('sequelize.or'),
-  like: Symbol.for('sequelize.like'),
-  gte: Symbol.for('sequelize.gte'),
-  lte: Symbol.for('sequelize.lte'),
-  in: Symbol.for('sequelize.in'),
-  not: Symbol.for('sequelize.not'),
-};
-jest.unstable_mockModule('sequelize', () => ({
-  Op: OpSymbols,
-  UniqueConstraintError: UniqueConstraintErrorShim,
-}));
-
-const mockWithTransaction = jest.fn(async (fn: (t: any) => any) => {
-  const t = { LOCK: { UPDATE: 'UPDATE' } };
-  return fn(t);
-});
-jest.unstable_mockModule('../../utils/tx.js', () => ({
-  withTransaction: mockWithTransaction,
-}));
-
-const ProductModelFns: any = {
-  create: jest.fn(),
-  findByPk: jest.fn(),
-  findOne: jest.fn(),
-  findAndCountAll: jest.fn(),
-  destroy: jest.fn(),
-};
-const ProductImageModelFns: any = {
-  findAll: jest.fn(),
-  destroy: jest.fn(),
-};
-jest.unstable_mockModule('../../models/product.model.js', () => ({
-  ProductModel: ProductModelFns,
-}));
-jest.unstable_mockModule('../../models/product-image.model.js', () => ({
-  ProductImageModel: ProductImageModelFns,
-}));
-
-const mockPublicUrlToAbsPathIfLocal = jest.fn((u: string) => u);
-const mockTryUnlink = jest.fn(async () => true);
-jest.unstable_mockModule('../../utils/upload.js', () => ({
-  publicUrlToAbsPathIfLocal: mockPublicUrlToAbsPathIfLocal,
-  tryUnlink: mockTryUnlink,
-}));
-
-const { DuplicateError, NotFoundError } = await import('../../errors/index.js');
-
-/* ========================= Load SUT after mocks ========================= */
-const { ProductService } = await import('../../services/product.service.js');
-const { ProductModel } = await import('../../models/product.model.js');
-const { ProductImageModel } = await import(
-  '../../models/product-image.model.js'
-);
-const { withTransaction } = await import('../../utils/tx.js');
-const { Op } = await import('sequelize');
-const { publicUrlToAbsPathIfLocal, tryUnlink } = await import(
-  '../../utils/upload.js'
-);
-
-const OpAny: any = Op;
+/* ========================= Type imports only ========================= */
+import type { ListProductsQuery } from '../../types/product.js';
 
 /* ================================ Helpers ================================= */
 
@@ -93,7 +28,7 @@ type MockProduct = {
   get?: (k: string) => any;
 } & Record<string, unknown>;
 
-const mkProduct = (over: Partial<MockProduct> = {}): MockProduct => {
+function mkProduct(over: Partial<MockProduct> = {}): MockProduct {
   const data: any = {
     productId: 'EAN:1',
     productCode: 'ABC-1',
@@ -136,9 +71,48 @@ const mkProduct = (over: Partial<MockProduct> = {}): MockProduct => {
   inst.get = (k: string) => data[k];
 
   return inst as MockProduct;
-};
+}
+
+/* ========================= Mock setup ========================= */
+
+const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
+const mockWithTransaction = jest.fn(async (fn: any) => fn(fakeTx));
+
+const mockPublicUrlToAbsPathIfLocal = jest.fn((u: string) => u);
+const mockTryUnlink = jest.fn(async () => true);
+
+// Mock modules
+jest.mock('../../utils/tx.js', () => ({
+  withTransaction: mockWithTransaction,
+}));
+
+jest.mock('../../utils/upload.js', () => ({
+  publicUrlToAbsPathIfLocal: mockPublicUrlToAbsPathIfLocal,
+  tryUnlink: mockTryUnlink,
+}));
+
+/* ========================= Import after mocks ========================= */
+
+import { ProductService } from '../../services/product.service.js';
+import { ProductModel } from '../../models/product.model.js';
+import { ProductImageModel } from '../../models/product-image.model.js';
+import { DuplicateError, NotFoundError } from '../../errors/index.js';
+
+/* ================================ Lifecycle ================================= */
 
 beforeEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+  mockWithTransaction.mockClear();
+  mockWithTransaction.mockImplementation(async (fn: any) => fn(fakeTx));
+  mockPublicUrlToAbsPathIfLocal.mockClear();
+  mockPublicUrlToAbsPathIfLocal.mockImplementation((u: string) => u);
+  mockTryUnlink.mockClear();
+  mockTryUnlink.mockImplementation(async () => true);
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
   jest.clearAllMocks();
 });
 
@@ -155,7 +129,7 @@ describe('ProductService.create', () => {
       quantityUnit: 'pack',
       description: '4x330ml',
     });
-    asMock(ProductModel.create).mockResolvedValue(inst as any);
+    jest.spyOn(ProductModel, 'create').mockResolvedValue(inst as any);
 
     const out = await ProductService.create({
       productId: 'EAN:123',
@@ -167,7 +141,7 @@ describe('ProductService.create', () => {
       description: '4x330ml',
     });
 
-    expect(withTransaction).toHaveBeenCalled();
+    expect(mockWithTransaction).toHaveBeenCalled();
     expect(ProductModel.create).toHaveBeenCalledWith(
       {
         productId: 'EAN:123',
@@ -178,15 +152,15 @@ describe('ProductService.create', () => {
         quantityUnit: 'pack',
         description: '4x330ml',
       },
-      expect.objectContaining({ transaction: expect.anything() })
+      expect.objectContaining({ transaction: fakeTx })
     );
     expect(out).toMatchObject({ productId: 'EAN:123', productCode: 'XYZ-123' });
   });
 
   test('UniqueConstraintError -> DuplicateError', async () => {
-    asMock(ProductModel.create).mockRejectedValue(
-      new UniqueConstraintErrorShim('dup')
-    );
+    jest
+      .spyOn(ProductModel, 'create')
+      .mockRejectedValue(new UniqueConstraintError({ message: 'dup' } as any));
     await expect(
       ProductService.create({
         productId: 'p1',
@@ -200,7 +174,7 @@ describe('ProductService.create', () => {
 describe('ProductService.getById', () => {
   test('returns product JSON', async () => {
     const inst = mkProduct({ productId: 'X1' });
-    asMock(ProductModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(inst as any);
 
     const out = await ProductService.getById('X1');
     expect(ProductModel.findByPk).toHaveBeenCalledWith('X1');
@@ -208,7 +182,7 @@ describe('ProductService.getById', () => {
   });
 
   test('throws NotFound when missing', async () => {
-    asMock(ProductModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(null as any);
     await expect(ProductService.getById('nope')).rejects.toBeInstanceOf(
       NotFoundError
     );
@@ -218,7 +192,7 @@ describe('ProductService.getById', () => {
 describe('ProductService.getByCode', () => {
   test('normalizes (trim + uppercase) and finds product', async () => {
     const inst = mkProduct({ productCode: 'ABC-123' });
-    asMock(ProductModel.findOne).mockResolvedValue(inst as any);
+    jest.spyOn(ProductModel, 'findOne').mockResolvedValue(inst as any);
 
     const out = await ProductService.getByCode('  abc-123 ');
     expect(ProductModel.findOne).toHaveBeenCalledWith({
@@ -228,7 +202,7 @@ describe('ProductService.getByCode', () => {
   });
 
   test('throws NotFound when missing', async () => {
-    asMock(ProductModel.findOne).mockResolvedValue(null as any);
+    jest.spyOn(ProductModel, 'findOne').mockResolvedValue(null as any);
     await expect(ProductService.getByCode('zzz')).rejects.toBeInstanceOf(
       NotFoundError
     );
@@ -238,7 +212,7 @@ describe('ProductService.getByCode', () => {
 describe('ProductService.update', () => {
   test('updates allowed fields and returns JSON', async () => {
     const inst = mkProduct({ productId: 'P7', productName: 'Old' });
-    asMock(ProductModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(inst as any);
 
     const out = await ProductService.update('P7', {
       productName: 'New Name',
@@ -251,7 +225,7 @@ describe('ProductService.update', () => {
     expect(ProductModel.findByPk).toHaveBeenCalledWith(
       'P7',
       expect.objectContaining({
-        transaction: expect.anything(),
+        transaction: fakeTx,
         lock: 'UPDATE',
       })
     );
@@ -267,7 +241,7 @@ describe('ProductService.update', () => {
   });
 
   test('throws NotFound when product missing', async () => {
-    asMock(ProductModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(null as any);
     await expect(
       ProductService.update('nope', { productName: 'x' })
     ).rejects.toBeInstanceOf(NotFoundError);
@@ -275,8 +249,10 @@ describe('ProductService.update', () => {
 
   test('UniqueConstraintError on save -> DuplicateError', async () => {
     const inst = mkProduct({ productId: 'P1' });
-    asMock(ProductModel.findByPk).mockResolvedValue(inst as any);
-    asMock(inst.save).mockRejectedValue(new UniqueConstraintErrorShim('dup'));
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(inst as any);
+    (inst.save as any).mockRejectedValue(
+      new UniqueConstraintError({ message: 'dup' } as any)
+    );
 
     await expect(
       ProductService.update('P1', { productCode: 'TAKEN' })
@@ -287,48 +263,48 @@ describe('ProductService.update', () => {
 describe('ProductService.delete', () => {
   test('deletes images and product, then unlinks local files', async () => {
     const inst = mkProduct({ productId: 'DEL1' });
-    asMock(ProductModel.findByPk).mockResolvedValue(inst as any);
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(inst as any);
 
-    asMock(ProductImageModel.findAll).mockResolvedValue([
+    jest.spyOn(ProductImageModel, 'findAll').mockResolvedValue([
       { get: (k: string) => (k === 'url' ? '/uploads/a.jpg' : undefined) },
       {
         get: (k: string) => (k === 'url' ? 'http://ext.com/b.jpg' : undefined),
       },
     ] as any);
 
-    asMock(ProductImageModel.destroy).mockResolvedValue(2 as any);
-    asMock(ProductModel.destroy).mockResolvedValue(1 as any);
+    jest.spyOn(ProductImageModel, 'destroy').mockResolvedValue(2 as any);
+    jest.spyOn(ProductModel, 'destroy').mockResolvedValue(1 as any);
 
     const out = await ProductService.delete('DEL1');
 
-    expect(withTransaction).toHaveBeenCalled();
+    expect(mockWithTransaction).toHaveBeenCalled();
     expect(ProductImageModel.findAll).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { productId: 'DEL1' },
         lock: 'UPDATE',
-        transaction: expect.anything(),
+        transaction: fakeTx,
       })
     );
     expect(ProductImageModel.destroy).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { productId: 'DEL1' },
-        transaction: expect.anything(),
+        transaction: fakeTx,
       })
     );
     expect(ProductModel.destroy).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { productId: 'DEL1' },
-        transaction: expect.anything(),
+        transaction: fakeTx,
       })
     );
 
-    expect(publicUrlToAbsPathIfLocal).toHaveBeenCalledTimes(2);
-    expect(tryUnlink).toHaveBeenCalledTimes(2);
+    expect(mockPublicUrlToAbsPathIfLocal).toHaveBeenCalledTimes(2);
+    expect(mockTryUnlink).toHaveBeenCalledTimes(2);
     expect(out).toEqual({ success: true });
   });
 
   test('throws NotFound when product missing', async () => {
-    asMock(ProductModel.findByPk).mockResolvedValue(null as any);
+    jest.spyOn(ProductModel, 'findByPk').mockResolvedValue(null as any);
     await expect(ProductService.delete('nope')).rejects.toBeInstanceOf(
       NotFoundError
     );
@@ -341,10 +317,9 @@ describe('ProductService.list', () => {
       mkProduct({ productId: 'L1' }),
       mkProduct({ productId: 'L2' }),
     ];
-    asMock(ProductModel.findAndCountAll).mockResolvedValue({
-      rows,
-      count: 42,
-    } as any);
+    jest
+      .spyOn(ProductModel, 'findAndCountAll')
+      .mockResolvedValue({ rows, count: 42 } as any);
 
     const res = await ProductService.list({
       page: 3,
@@ -354,25 +329,26 @@ describe('ProductService.list', () => {
       orderDir: 'ASC',
     });
 
-    const call = asMock(ProductModel.findAndCountAll).mock.calls[0][0];
+    const calls = (ProductModel.findAndCountAll as jest.Mock).mock.calls;
+    const call = calls[0][0];
     expect(call.limit).toBe(10);
     expect(call.offset).toBe(20);
     expect(call.order).toEqual([['productName', 'ASC']]);
 
-    // ✅ buildProductWhere wraps q under { [Op.and]: [ { [Op.or]: [...] } ] }
+    // buildProductWhere wraps q under { [Op.and]: [ { [Op.or]: [...] } ] }
     const where = call.where ?? {};
     const whereSyms = Object.getOwnPropertySymbols(where);
-    expect(whereSyms).toContain(OpAny.and);
+    expect(whereSyms).toContain(Op.and);
 
-    const andParts = (where as any)[OpAny.and] as any[];
+    const andParts = (where as any)[Op.and] as any[];
     expect(Array.isArray(andParts)).toBe(true);
 
     const innerOr = andParts.find((p) =>
-      Object.getOwnPropertySymbols(p).includes(OpAny.or)
+      Object.getOwnPropertySymbols(p).includes(Op.or)
     );
     expect(innerOr).toBeTruthy();
 
-    const clauses = (innerOr as any)[OpAny.or];
+    const clauses = (innerOr as any)[Op.or];
     expect(Array.isArray(clauses)).toBe(true);
     expect(clauses.length).toBeGreaterThanOrEqual(1);
 
@@ -387,10 +363,9 @@ describe('ProductService.list', () => {
 describe('ProductService.filter', () => {
   test('applies structured filters incl. quantity + date ranges', async () => {
     const rows = [mkProduct({ productId: 'F1' })];
-    asMock(ProductModel.findAndCountAll).mockResolvedValue({
-      rows,
-      count: 1,
-    } as any);
+    jest
+      .spyOn(ProductModel, 'findAndCountAll')
+      .mockResolvedValue({ rows, count: 1 } as any);
 
     const res = await ProductService.filter({
       q: 'fizz',
@@ -413,19 +388,20 @@ describe('ProductService.filter', () => {
       },
     });
 
-    const call = asMock(ProductModel.findAndCountAll).mock.calls[0][0];
+    const calls = (ProductModel.findAndCountAll as jest.Mock).mock.calls;
+    const call = calls[0][0];
 
     expect(call.limit).toBe(5);
     expect(call.offset).toBe(0);
     expect(call.order).toEqual([['createdAt', 'DESC']]);
 
     const where = call.where ?? {};
-    const hasAnd = Object.getOwnPropertySymbols(where).includes(OpAny.and);
+    const hasAnd = Object.getOwnPropertySymbols(where).includes(Op.and);
     expect(hasAnd).toBe(true);
 
-    const andParts = (where as any)[OpAny.and] as any[];
+    const andParts = (where as any)[Op.and] as any[];
     const qtyPart = andParts.find((p) => p.quantity);
-    const qtyAndSym = OpAny.and;
+    const qtyAndSym = Op.and;
 
     expect(qtyPart.quantity[qtyAndSym]).toBeTruthy();
     expect(qtyPart.quantity[qtyAndSym]).toEqual(

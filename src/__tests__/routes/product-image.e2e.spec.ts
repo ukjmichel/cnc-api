@@ -1,5 +1,5 @@
 /**
- * E2E — Product Image routes with the REAL app + REAL MySQL (no mocks)
+ * E2E – Product Image routes with the REAL app + REAL MySQL (no mocks)
  *
  * - Spins up the actual Express app (imported from ../../app.js)
  * - Creates an admin directly in DB, logs in via /api/auth/login
@@ -18,14 +18,11 @@
  *    • delete all by product
  */
 
-import 'reflect-metadata';
-import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';
 import { UserModel } from '../../models/user.model.js';
 import { AuthorizationModel } from '../../models/authorization.model.js';
-import { ProductModel } from '../../models/product.model.js';
 import { app } from '../../app.js';
 
 /* ----------------------------- helpers ----------------------------- */
@@ -83,6 +80,7 @@ const mkUrl = (tag = '') =>
 
 /* ---------------- Authorization header for admin ------------------ */
 let adminBearer = '';
+let consoleErrorSpy: jest.SpyInstance;
 
 /* ------------------------------- setup ------------------------------- */
 
@@ -93,11 +91,14 @@ beforeAll(async () => {
   // Fresh DB
   await cleanAllTables();
 
+  // Suppress console.error for expected test errors
+  consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
   // Create an admin directly in DB
   const admin = await UserModel.create({
     username: mkUsername('admin'),
     firstName: 'Admin',
-    lastName: 'User', // >= 2 chars to satisfy validation
+    lastName: 'User',
     email: `admin${Date.now()}@e2e.test`,
     password: 'pw', // hashed by model hook
   });
@@ -118,12 +119,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  consoleErrorSpy.mockRestore();
   await sequelize.close();
 });
 
 /* -------------------------------- tests ------------------------------- */
 
-describe('Product Image routes — real DB + real app', () => {
+describe('Product Image routes – real DB + real app', () => {
   // Create a product once to attach images to
   const product = {
     productId: mkProductId(),
@@ -154,7 +156,7 @@ describe('Product Image routes — real DB + real app', () => {
       .send(product)
       .expect(201);
 
-    expect(res.body?.data?.product?.productId).toBe(product.productId);
+    expect(res.body.data.product.productId).toBe(product.productId);
   });
 
   test('POST /api/product-images → create (201)', async () => {
@@ -171,11 +173,13 @@ describe('Product Image routes — real DB + real app', () => {
       .send(body)
       .expect(201);
 
-    const img = res.body?.data?.image;
-    expect(img?.productId).toBe(product.productId);
-    expect(img?.variant).toBe(variants.front);
-    expect(img?.url).toBe(body.url);
-    frontId = img?.imageId;
+    const img = res.body.data.image;
+    expect(img).toMatchObject({
+      productId: product.productId,
+      variant: variants.front,
+      url: body.url,
+    });
+    frontId = img.imageId;
   });
 
   test('GET /api/product-images/by-product (PUBLIC) → returns image (200)', async () => {
@@ -187,9 +191,11 @@ describe('Product Image routes — real DB + real app', () => {
       )
       .expect(200);
 
-    const img = res.body?.data?.image;
-    expect(img?.productId).toBe(product.productId);
-    expect(img?.variant).toBe(variants.front);
+    const img = res.body.data.image;
+    expect(img).toMatchObject({
+      productId: product.productId,
+      variant: variants.front,
+    });
   });
 
   test('GET /api/product-images/:id (200, protected)', async () => {
@@ -198,8 +204,8 @@ describe('Product Image routes — real DB + real app', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    const img = res.body?.data?.image;
-    expect(img?.imageId).toBe(frontId);
+    const img = res.body.data.image;
+    expect(img.imageId).toBe(frontId);
   });
 
   test('PATCH /api/product-images/:id → update (200)', async () => {
@@ -211,12 +217,14 @@ describe('Product Image routes — real DB + real app', () => {
       .send(patch)
       .expect(200);
 
-    const img = res.body?.data?.image;
-    expect(img?.alt).toBe(patch.alt);
-    expect(img?.url).toBe(patch.url);
+    const img = res.body.data.image;
+    expect(img).toMatchObject({
+      alt: patch.alt,
+      url: patch.url,
+    });
   });
 
-  test('POST /api/product-images/upsert → creates new variant (200|201)', async () => {
+  test('POST /api/product-images/upsert → creates new variant (200)', async () => {
     const payload = {
       productId: product.productId,
       variant: variants.back,
@@ -227,16 +235,18 @@ describe('Product Image routes — real DB + real app', () => {
     const res = await request(app)
       .post('/api/product-images/upsert')
       .set('Authorization', adminBearer)
-      .send(payload);
+      .send(payload)
+      .expect(200);
 
-    expect([200, 201]).toContain(res.status);
-    const img = res.body?.data?.image;
-    backId = img?.imageId;
-    expect(img?.variant).toBe(variants.back);
-    expect(img?.url).toBe(payload.url);
+    const img = res.body.data.image;
+    backId = img.imageId;
+    expect(img).toMatchObject({
+      variant: variants.back,
+      url: payload.url,
+    });
   });
 
-  test('POST /api/product-images/upsert → updates existing variant (200|201)', async () => {
+  test('POST /api/product-images/upsert → updates existing variant (200)', async () => {
     const payload = {
       productId: product.productId,
       variant: variants.back,
@@ -247,13 +257,15 @@ describe('Product Image routes — real DB + real app', () => {
     const res = await request(app)
       .post('/api/product-images/upsert')
       .set('Authorization', adminBearer)
-      .send(payload);
+      .send(payload)
+      .expect(200);
 
-    expect([200, 201]).toContain(res.status);
-    const img = res.body?.data?.image;
-    expect(img?.variant).toBe(variants.back);
-    expect(img?.url).toBe(payload.url);
-    expect(img?.alt).toBe(payload.alt);
+    const img = res.body.data.image;
+    expect(img).toMatchObject({
+      variant: variants.back,
+      url: payload.url,
+      alt: payload.alt,
+    });
   });
 
   test('POST /api/product-images/upload (multipart) → creates row (201)', async () => {
@@ -268,11 +280,13 @@ describe('Product Image routes — real DB + real app', () => {
       .attach('image', fileBuf, 'cover.jpg')
       .expect(201);
 
-    const img = res.body?.data?.image;
-    expect(img?.productId).toBe(product.productId);
-    expect(img?.variant).toBe(variants.cover);
-    expect(typeof img?.url).toBe('string');
-    expect(img?.url?.length).toBeGreaterThan(0);
+    const img = res.body.data.image;
+    expect(img).toMatchObject({
+      productId: product.productId,
+      variant: variants.cover,
+    });
+    expect(img.url).toBeTruthy();
+    expect(typeof img.url).toBe('string');
   });
 
   test('GET /api/product-images → list (200)', async () => {
@@ -283,15 +297,13 @@ describe('Product Image routes — real DB + real app', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(Array.isArray(res.body?.data?.images)).toBe(true);
-    expect(res.body?.meta).toEqual(
-      expect.objectContaining({
-        page: 1,
-        pageSize: 5,
-        total: expect.any(Number),
-        pages: expect.any(Number),
-      })
-    );
+    expect(Array.isArray(res.body.data.images)).toBe(true);
+    expect(res.body.meta).toMatchObject({
+      page: 1,
+      pageSize: 5,
+      total: expect.any(Number),
+      pages: expect.any(Number),
+    });
   });
 
   test('GET /api/product-images/filter → filter (200)', async () => {
@@ -308,13 +320,13 @@ describe('Product Image routes — real DB + real app', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(Array.isArray(res.body?.data?.images)).toBe(true);
+    expect(Array.isArray(res.body.data.images)).toBe(true);
     const ids = res.body.data.images.map((i: any) => i.productId);
     expect(ids).toContain(product.productId);
   });
 
   test('DELETE /api/product-images/by-product?productId=&variant= (200)', async () => {
-    await request(app)
+    const res = await request(app)
       .delete(
         `/api/product-images/by-product?productId=${encodeURIComponent(
           product.productId
@@ -322,17 +334,21 @@ describe('Product Image routes — real DB + real app', () => {
       )
       .set('Authorization', adminBearer)
       .expect(200);
+
+    expect(res.body.data.success).toBe(true);
   });
 
   test('DELETE /api/product-images/:id → remove by id (200)', async () => {
-    await request(app)
+    const res = await request(app)
       .delete(`/api/product-images/${backId}`)
       .set('Authorization', adminBearer)
       .expect(200);
+
+    expect(res.body.data.success).toBe(true);
   });
 
   test('DELETE /api/product-images/by-product/:productId → remove all (200)', async () => {
-    // add two more via upsert
+    // Add two more via upsert
     await request(app)
       .post('/api/product-images/upsert')
       .set('Authorization', adminBearer)
@@ -342,7 +358,7 @@ describe('Product Image routes — real DB + real app', () => {
         url: mkUrl('left'),
         alt: 'left',
       })
-      .expect([200, 201] as any);
+      .expect(200);
 
     await request(app)
       .post('/api/product-images/upsert')
@@ -353,22 +369,16 @@ describe('Product Image routes — real DB + real app', () => {
         url: mkUrl('right'),
         alt: 'right',
       })
-      .expect([200, 201] as any);
+      .expect(200);
 
     const res = await request(app)
       .delete(`/api/product-images/by-product/${product.productId}`)
       .set('Authorization', adminBearer)
       .expect(200);
 
-    const out = res.body?.data;
-    expect(out?.success).toBe(true);
-    expect(typeof out?.deleted).toBe('number');
+    const out = res.body.data;
+    expect(out.success).toBe(true);
+    expect(typeof out.deleted).toBe('number');
     expect(out.deleted).toBeGreaterThanOrEqual(2);
-
-    // urls may be omitted by the controller; if present, validate them
-    if (Array.isArray(out?.urls)) {
-      expect(out.urls.length).toBeGreaterThanOrEqual(2);
-      expect(out.urls.every((u: unknown) => typeof u === 'string')).toBe(true);
-    }
   });
 });

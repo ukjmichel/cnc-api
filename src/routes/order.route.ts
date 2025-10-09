@@ -2,9 +2,8 @@
 import { Router } from 'express';
 import { OrderController } from '../controllers/order.controller.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
-import { requireAdmin, requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
+import { requireEmployeeOrAdmin } from '../middlewares/requireRole.js';
 import { requireOrderOwnerOrStaff } from '../middlewares/requireOrderOwnerOrStaff.js';
-import { validate } from '../middlewares/validate.js';
 import {
   vCreateOrder,
   vListOrders,
@@ -195,7 +194,6 @@ orderRouter.post(
   requireAuth,
   requireEmployeeOrAdmin,
   vCreateOrder,
-  requireAdmin,
   OrderController.create
 );
 
@@ -255,7 +253,7 @@ orderRouter.post(
  *       500:
  *         description: Internal error
  */
-orderRouter.get('/', requireAuth, vListOrders,  OrderController.list);
+orderRouter.get('/', requireAuth, vListOrders, OrderController.list);
 
 /**
  * @swagger
@@ -313,7 +311,6 @@ orderRouter.get(
   requireAuth,
   requireEmployeeOrAdmin,
   vFilterOrders,
-  
   OrderController.filter
 );
 
@@ -364,7 +361,6 @@ orderRouter.get(
   '/self',
   requireAuth,
   vListSelfOrders,
-  
   OrderController.listSelf
 );
 
@@ -398,7 +394,6 @@ orderRouter.get(
   requireAuth,
   requireOrderOwnerOrStaff,
   vGetSelfOrderById,
-  
   OrderController.getSelfById
 );
 
@@ -435,7 +430,6 @@ orderRouter.get(
   requireAuth,
   requireOrderOwnerOrStaff,
   vGetOrderById,
-  
   OrderController.getById
 );
 
@@ -473,7 +467,6 @@ orderRouter.patch(
   requireAuth,
   requireOrderOwnerOrStaff,
   vUpdateOrderTotals,
-  
   OrderController.updateTotals
 );
 
@@ -511,7 +504,6 @@ orderRouter.patch(
   requireAuth,
   requireOrderOwnerOrStaff,
   vUpdateOrderContact,
-  
   OrderController.updateContact
 );
 
@@ -554,7 +546,6 @@ orderRouter.patch(
   requireAuth,
   requireOrderOwnerOrStaff,
   vChangeOrderStatus,
-  
   OrderController.changeStatus
 );
 
@@ -596,7 +587,6 @@ orderRouter.patch(
   requireAuth,
   requireOrderOwnerOrStaff,
   vSetOrderPickupSlot,
-  
   OrderController.setPickupSlot
 );
 
@@ -633,7 +623,6 @@ orderRouter.delete(
   requireAuth,
   requireOrderOwnerOrStaff,
   vDeleteOrder,
-  
   OrderController.remove
 );
 

@@ -1,6 +1,6 @@
 /**
  * =============================================================================
- * App — Express application bootstrap (no network listener here)
+ * App – Express application bootstrap (no network listener here)
  * =============================================================================
  * Responsibilities
  *  - Create and configure the Express app instance.
@@ -26,6 +26,9 @@ import stockRouter from './routes/stock.route.js';
 import pickupSlotRouter from './routes/pickup-slot.route.js';
 import orderRouter from './routes/order.route.js';
 import orderItemsNestedRouter from './routes/order-item.route.js';
+import { OrderItemsController } from './controllers/order-item.controller.js';
+import { requireAuth } from './middlewares/requireAuth.js';
+import { vGlobalFilter } from './validators/order-item.validators.js';
 
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './docs/swagger.js';
@@ -77,6 +80,14 @@ app.use('/api/product-images', productImageRouter);
 app.use('/api/stocks', stockRouter);
 app.use('/api/pickup-slots', pickupSlotRouter);
 app.use('/api/orders', orderRouter);
+
+// Global order-items filter/search (mounted separately, not nested)
+app.get(
+  '/api/order-items',
+  requireAuth,
+  vGlobalFilter,
+  OrderItemsController.filter
+);
 
 // Nested order-items endpoints (e.g., /api/orders/:orderId/items/…)
 app.use('/api/orders/:orderId/items', orderItemsNestedRouter);

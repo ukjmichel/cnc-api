@@ -3,17 +3,6 @@
  * - Real DB, no mocks. We log in once and reuse cookies via supertest.agent.
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeAll,
-  afterAll,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
-
 import request from 'supertest';
 import { randomUUID as uuid } from 'crypto';
 
@@ -72,11 +61,15 @@ const mkUsername = (prefix: string) =>
 let adminBearer = '' as string;
 let agent = request.agent(app); // persists cookies between calls
 let currentUserId = `U${Date.now()}`; // used for seeded orders
+let consoleErrorSpy: jest.SpyInstance;
 
 beforeAll(async () => {
   await sequelize.authenticate();
   await sequelize.sync({ alter: true });
   await cleanAllTables();
+
+  // Suppress console.error for expected test errors (404s, 400s, etc.)
+  consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
   // Create an admin and login to get cookies + optional Bearer
   const admin = await UserModel.create({
@@ -105,6 +98,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  consoleErrorSpy.mockRestore();
   await sequelize.close();
 });
 
@@ -133,7 +127,6 @@ async function seedProduct(partial: Partial<Record<string, any>> = {}) {
   const productId = partial.productId ?? uuid();
   const row = await ProductModel.create({
     productId,
-    // Canonical names + legacy aliases for compatibility with your model
     productCode: partial.productCode ?? `code-${productId.slice(0, 8)}`,
     sku: partial.sku ?? `code-${productId.slice(0, 8)}`,
     productName: partial.productName ?? 'Test Product',
@@ -146,14 +139,17 @@ async function seedProduct(partial: Partial<Record<string, any>> = {}) {
 }
 
 async function seedStock(partial: Partial<Record<string, any>> = {}) {
-  const product = partial.productId
-    ? { productId: partial.productId }
-    : await seedProduct();
+  // Ensure we have a product first
+  let productId = partial.productId;
+  if (!productId) {
+    const product = await seedProduct();
+    productId = product.productId;
+  }
 
   const stockId = partial.stockId ?? uuid();
   const row = await StockModel.create({
     stockId,
-    productId: product.productId,
+    productId,
     quantity: partial.quantity ?? '10.000',
     unitPrice: partial.unitPrice ?? '2.00',
     location: partial.location ?? 'WH1',
@@ -168,17 +164,19 @@ async function seedStock(partial: Partial<Record<string, any>> = {}) {
 describe('POST /api/orders/:orderId/items (create)', () => {
   test('400 → validator catches missing body fields', async () => {
     const o = await seedOrder();
+
     const res = await agent
       .post(`/api/orders/${o.orderId}/items`)
       .set('Authorization', adminBearer)
-      .send({}) // missing stockId & quantity
-      .expect((res) => {
-        expect([400, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^BAD_REQUEST$/i);
-      });
+      .send({}); // missing stockId & quantity
 
-    expect(res.body?.error).toBeDefined();
+    // Should be 400, but if 500, log the error for debugging
+    if (res.status === 500) {
+      console.log('Unexpected 500 error:', res.body);
+    }
+
+    expect(res.status).toBe(400);
+    expect(res.body.error || res.body.code).toMatch(/BAD_REQUEST/i);
   });
 
   test('404 → order exists, stock missing → NotFound', async () => {
@@ -188,14 +186,16 @@ describe('POST /api/orders/:orderId/items (create)', () => {
     const res = await agent
       .post(`/api/orders/${o.orderId}/items`)
       .set('Authorization', adminBearer)
-      .send({ stockId: fakeStockId, quantity: '1.000' })
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .send({ stockId: fakeStockId, quantity: '1.000' });
 
-    expect(String(res.body?.message || '')).toMatch(/stock/i);
+    // Should be 404, but if 500, log the error for debugging
+    if (res.status === 500) {
+      console.log('Unexpected 500 error:', res.body);
+    }
+
+    expect(res.status).toBe(404);
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
+    expect(res.body.message).toMatch(/stock/i);
   });
 
   test('201 → creates item, computes totals, deducts stock', async () => {
@@ -209,16 +209,15 @@ describe('POST /api/orders/:orderId/items (create)', () => {
       .expect(201);
 
     const item = res.body?.data?.item;
-    expect(item).toEqual(
-      expect.objectContaining({
-        orderId: o.orderId,
-        stockId: s.stockId,
-        quantity: '1.250',
-        unitPrice: '3.50',
-        lineTotal: '4.38',
-      })
-    );
+    expect(item).toMatchObject({
+      orderId: o.orderId,
+      stockId: s.stockId,
+      quantity: '1.250',
+      unitPrice: '3.50',
+      lineTotal: '4.38',
+    });
 
+    // Verify stock was deducted
     const updated = await StockModel.findByPk(s.stockId);
     expect(Number(updated?.get('quantity'))).toBeCloseTo(3.75, 3);
   });
@@ -228,18 +227,20 @@ describe('GET /api/orders/:orderId/items (listForOrder)', () => {
   test('200 → returns paginated items (empty first, then one after create)', async () => {
     const o = await seedOrder();
 
-    // initially empty
+    // Initially empty
     const res1 = await agent
       .get(`/api/orders/${o.orderId}/items?page=1&pageSize=5`)
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(res1.body?.data?.items).toEqual([]);
-    expect(res1.body?.meta).toEqual(
-      expect.objectContaining({ total: 0, page: 1, pageSize: 5 })
-    );
+    expect(res1.body.data.items).toEqual([]);
+    expect(res1.body.meta).toMatchObject({
+      total: 0,
+      page: 1,
+      pageSize: 5,
+    });
 
-    // seed an item via API
+    // Seed an item via API
     const s = await seedStock({ unitPrice: '2.00', quantity: '2.000' });
     await agent
       .post(`/api/orders/${o.orderId}/items`)
@@ -247,6 +248,7 @@ describe('GET /api/orders/:orderId/items (listForOrder)', () => {
       .send({ stockId: s.stockId, quantity: '1.000' })
       .expect(201);
 
+    // Now should have one item
     const res2 = await agent
       .get(
         `/api/orders/${o.orderId}/items?page=1&pageSize=5&orderBy=createdAt&orderDir=DESC`
@@ -254,19 +256,21 @@ describe('GET /api/orders/:orderId/items (listForOrder)', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(res2.body?.data?.items?.length).toBe(1);
-    expect(res2.body?.meta?.total).toBe(1);
+    expect(res2.body.data.items).toHaveLength(1);
+    expect(res2.body.meta.total).toBe(1);
   });
 
   test('404 → order not found', async () => {
-    await agent
+    const res = await agent
       .get(`/api/orders/${uuid()}/items`)
-      .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .set('Authorization', adminBearer);
+
+    if (res.status === 500) {
+      console.log('Unexpected 500 error:', res.body);
+    }
+
+    expect(res.status).toBe(404);
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
   });
 });
 
@@ -286,20 +290,23 @@ describe('GET /api/orders/:orderId/items/:stockId (getOne)', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(res.body?.data?.item).toEqual(
-      expect.objectContaining({ orderId: o.orderId, stockId: s.stockId })
-    );
+    expect(res.body.data.item).toMatchObject({
+      orderId: o.orderId,
+      stockId: s.stockId,
+    });
   });
 
   test('404 → order not found', async () => {
-    await agent
+    const res = await agent
       .get(`/api/orders/${uuid()}/items/${uuid()}`)
-      .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .set('Authorization', adminBearer);
+
+    if (res.status === 500) {
+      console.log('Unexpected 500 error:', res.body);
+    }
+
+    expect(res.status).toBe(404);
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
   });
 });
 
@@ -320,25 +327,25 @@ describe('PATCH /api/orders/:orderId/items/:stockId (update)', () => {
       .send({ quantity: '2.500', unitPrice: '3.00' })
       .expect(200);
 
-    expect(res.body?.data?.item).toEqual(
-      expect.objectContaining({
-        quantity: '2.500',
-        unitPrice: '3.00',
-        lineTotal: '7.50',
-      })
-    );
+    expect(res.body.data.item).toMatchObject({
+      quantity: '2.500',
+      unitPrice: '3.00',
+      lineTotal: '7.50',
+    });
   });
 
   test('404 → order not found', async () => {
-    await agent
+    const res = await agent
       .patch(`/api/orders/${uuid()}/items/${uuid()}`)
       .send({ quantity: '1.000' })
-      .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .set('Authorization', adminBearer);
+
+    if (res.status === 500) {
+      console.log('Unexpected 500 error:', res.body);
+    }
+
+    expect(res.status).toBe(404);
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
   });
 });
 
@@ -358,26 +365,29 @@ describe('DELETE /api/orders/:orderId/items/:stockId (remove)', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(delRes.body?.data).toEqual({ deleted: true });
+    expect(delRes.body.data).toEqual({ deleted: true });
 
+    // Verify item is gone
     const listRes = await agent
       .get(`/api/orders/${o.orderId}/items`)
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(listRes.body?.meta?.total).toBe(0);
-    expect(listRes.body?.data?.items).toEqual([]);
+    expect(listRes.body.meta.total).toBe(0);
+    expect(listRes.body.data.items).toEqual([]);
   });
 
   test('404 → order not found', async () => {
-    await agent
+    const res = await agent
       .delete(`/api/orders/${uuid()}/items/${uuid()}`)
-      .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .set('Authorization', adminBearer);
+
+    if (res.status === 500) {
+      console.log('Unexpected 500 error:', res.body);
+    }
+
+    expect(res.status).toBe(404);
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
   });
 });
 
@@ -386,15 +396,12 @@ describe('GET /api/order-items (global filter via real router)', () => {
     const res = await agent
       .get('/api/order-items?page=1&pageSize=5&orderBy=createdAt&orderDir=DESC')
       .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([200, 404]).toContain(res.status);
-      });
+      .expect(200);
 
-    if (res.status === 200) {
-      expect(res.body?.data?.items).toBeDefined();
-      expect(res.body?.meta).toEqual(
-        expect.objectContaining({ page: 1, pageSize: 5 })
-      );
-    }
+    expect(res.body.data.items).toBeDefined();
+    expect(res.body.meta).toMatchObject({
+      page: 1,
+      pageSize: 5,
+    });
   });
 });

@@ -9,15 +9,8 @@
  *  - toJSON surface shape
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeAll,
-  afterAll,
-  beforeEach,
-  expect,
-} from '@jest/globals';
+
+
 import { sequelize } from '../../db/sequelize.js';
 import { OrderItemModel } from '../../models/order-item.model.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';

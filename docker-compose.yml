@@ -17,7 +17,6 @@ services:
       - '${HOST_MYSQL_PORT:-3314}:3306'
     volumes:
       - mysql_data:/var/lib/mysql
-      # still useful for first-time init; harmless otherwise
       - ./mysql-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1']
@@ -26,7 +25,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # one-shot init job that applies SQL even if volume already initialized
   db-init:
     image: mysql:8.0
     container_name: cnc_mysql_init
@@ -66,8 +64,15 @@ services:
     ports:
       - '${HOST_APP_PORT:-3000}:${PORT:-3000}'
     volumes:
-      - node_modules:/app/node_modules
-      - ./uploads:/app/uploads
+      # Source files for testing
+      - ./src:/usr/src/app/src
+      - ./jest.config.ts:/usr/src/app/jest.config.ts
+      - ./jest.setup.env.ts:/usr/src/app/jest.setup.env.ts
+      - ./tsconfig.json:/usr/src/app/tsconfig.json
+      - ./tsconfig.jest.json:/usr/src/app/tsconfig.jest.json
+      # Node modules and uploads
+      - node_modules:/usr/src/app/node_modules
+      - ./uploads:/usr/src/app/uploads
     restart: unless-stopped
 
 volumes:

@@ -1,53 +1,12 @@
 /**
  * OrderService — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeEach,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
 import { Op } from 'sequelize';
 
-/* ---------------- ESM-safe mocks (MUST be before importing SUT) ---------------- */
-
-const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
-// @ts-ignore
-jest.unstable_mockModule('../../utils/tx.js', () => ({
-  withTransaction: async (fn: any) => fn(fakeTx),
-}));
-
-// Strongly type the filterOrders mock so mockResolvedValueOnce accepts your object
-type FilterOrdersResult = {
-  orders: Array<{ orderId: string }>;
-  total: number;
-  page: number;
-  pageSize: number;
-  pages: number;
-};
-type FilterOrdersFn = (q: any) => Promise<FilterOrdersResult>;
-
-const filterOrdersMock = jest.fn() as jest.MockedFunction<FilterOrdersFn>;
-// @ts-ignore
-jest.unstable_mockModule('../../queries/order.queries.js', () => ({
-  filterOrders: filterOrdersMock,
-}));
-
-/* ---------------- Import SUT and models AFTER the mocks ---------------- */
-
-const { OrderService } = await import('../../services/order.service.js');
-const { OrderModel } = await import('../../models/order.model.js');
-const { PickupSlotModel } = await import('../../models/pickup-slot.model.js');
-
-import {
-  BadRequestError,
-  ConflictError,
-  NotFoundError,
-} from '../../errors/index.js';
+/* ---------------- Type imports only ---------------- */
+import type { ListOrdersResult } from '../../types/order.js';
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -132,12 +91,41 @@ function makeSlot(overrides: Partial<Record<string, any>> = {}) {
   return row;
 }
 
+/* ---------------- Mock setup ---------------- */
+
+const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
+const mockWithTransaction = jest.fn(async (fn: any) => fn(fakeTx));
+
+const filterOrdersMock = jest.fn<Promise<ListOrdersResult>, [any]>();
+
+// Mock the modules
+jest.mock('../../utils/tx.js', () => ({
+  withTransaction: mockWithTransaction,
+}));
+
+jest.mock('../../queries/order.queries.js', () => ({
+  filterOrders: filterOrdersMock,
+}));
+
+/* ---------------- Import after mocks ---------------- */
+
+import { OrderService } from '../../services/order.service.js';
+import { OrderModel } from '../../models/order.model.js';
+import { PickupSlotModel } from '../../models/pickup-slot.model.js';
+import {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+} from '../../errors/index.js';
+
 /* -------------------------------- lifecycle ------------------------------ */
 
 beforeEach(() => {
   jest.restoreAllMocks();
   jest.clearAllMocks();
   filterOrdersMock.mockReset();
+  mockWithTransaction.mockClear();
+  mockWithTransaction.mockImplementation(async (fn: any) => fn(fakeTx));
 });
 
 afterEach(() => {
@@ -288,13 +276,52 @@ describe('filter (delegates to query)', () => {
       page: 1,
       pageSize: 20,
       includeItems: true,
-    } as any);
+    });
 
     expect(filterOrdersMock).toHaveBeenCalledWith(
-      expect.objectContaining({ includeItems: true })
+      expect.objectContaining({
+        page: 1,
+        pageSize: 20,
+        includeItems: true,
+      })
     );
     expect(out.total).toBe(1);
     expect(out.orders[0].orderId).toBe('x');
+  });
+
+  test('calls filterOrders with filters and sorting', async () => {
+    filterOrdersMock.mockResolvedValueOnce({
+      orders: [{ orderId: 'y', status: 'paid' }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+      pages: 1,
+    });
+
+    const out = await OrderService.filter({
+      page: 1,
+      pageSize: 20,
+      orderBy: 'createdAt',
+      orderDir: 'DESC',
+      filters: {
+        status: 'paid',
+        userId: 'user123',
+      },
+    });
+
+    expect(filterOrdersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page: 1,
+        pageSize: 20,
+        orderBy: 'createdAt',
+        orderDir: 'DESC',
+        filters: expect.objectContaining({
+          status: 'paid',
+          userId: 'user123',
+        }),
+      })
+    );
+    expect(out.orders[0].status).toBe('paid');
   });
 });
 
@@ -367,7 +394,7 @@ describe('changeStatus (capacity sync)', () => {
 
     expect(findSlot).toHaveBeenCalledWith(
       'S1',
-      expect.objectContaining({ transaction: fakeTx, lock: fakeTx.LOCK.UPDATE })
+      expect.objectContaining({ transaction: fakeTx, lock: 'UPDATE' })
     );
     expect(slot.get('reservedCount')).toBe(2);
     expect(out.status).toBe('pending');
@@ -399,11 +426,11 @@ describe('changeStatus (capacity sync)', () => {
     const o = makeOrder({ status: 'pending', pickupSlotId: 'S1' });
 
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue(o as any);
-    jest
-      .spyOn(PickupSlotModel, 'findByPk')
-      .mockResolvedValue(makeSlot({ slotId: 'S1' }) as any);
+    const slotSpy = jest.spyOn(PickupSlotModel, 'findByPk');
 
     const out = await OrderService.changeStatus(o.orderId, 'paid');
+
+    expect(slotSpy).not.toHaveBeenCalled();
     expect(out.status).toBe('paid');
   });
 
@@ -451,6 +478,10 @@ describe('setPickupSlot', () => {
       .spyOn(OrderModel, 'findByPk')
       .mockResolvedValue(o as any);
 
+    // Three calls needed:
+    // 1. Release old slot A (bumpSlotReserved for old)
+    // 2. Get new slot B (_assignSlot loads the slot)
+    // 3. Reserve new slot B (bumpSlotReserved for new)
     const slotSpy = jest
       .spyOn(PickupSlotModel, 'findByPk')
       .mockResolvedValueOnce(slotOld as any)
@@ -461,7 +492,7 @@ describe('setPickupSlot', () => {
 
     expect(findPk).toHaveBeenCalledWith(
       o.orderId,
-      expect.objectContaining({ transaction: fakeTx, lock: fakeTx.LOCK.UPDATE })
+      expect.objectContaining({ transaction: fakeTx, lock: 'UPDATE' })
     );
     expect(slotOld.get('reservedCount')).toBe(1);
     expect(slotNew.get('reservedCount')).toBe(2);
@@ -528,7 +559,7 @@ describe('remove', () => {
 
     expect(findOrder).toHaveBeenCalledWith(
       o.orderId,
-      expect.objectContaining({ transaction: fakeTx, lock: fakeTx.LOCK.UPDATE })
+      expect.objectContaining({ transaction: fakeTx, lock: 'UPDATE' })
     );
     expect(findSlot).toHaveBeenCalled();
     expect(slot.get('reservedCount')).toBe(1);
@@ -541,9 +572,7 @@ describe('remove', () => {
   test('non-consuming or no slot → just destroy', async () => {
     const o = makeOrder({ status: 'draft', pickupSlotId: null });
     jest.spyOn(OrderModel, 'findByPk').mockResolvedValue(o as any);
-    const slotSpy = jest
-      .spyOn(PickupSlotModel, 'findByPk')
-      .mockResolvedValue(makeSlot() as any);
+    const slotSpy = jest.spyOn(PickupSlotModel, 'findByPk');
 
     const out = await OrderService.remove(o.orderId);
     expect(slotSpy).not.toHaveBeenCalled();

@@ -1,19 +1,8 @@
 /**
  * Order routes — E2E (real DB, real validators, supertest)
  * - Real DB, no mocks. We log in once and reuse cookies via supertest.agent.
- * - Focuses on /api/orders (create, list, get, patchs, self, delete).
+ * - Focuses on /api/orders (create, list, get, patches, self, delete).
  */
-
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeAll,
-  afterAll,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
 
 import request from 'supertest';
 import { randomUUID as uuid } from 'crypto';
@@ -71,11 +60,15 @@ const mkUsername = (prefix: string) =>
 let adminBearer = '' as string;
 let agent = request.agent(app); // persists cookies between calls
 let currentUserId = `U${Date.now()}`; // used for seeded orders
+let consoleErrorSpy: jest.SpyInstance;
 
 beforeAll(async () => {
   await sequelize.authenticate();
   await sequelize.sync({ alter: true });
   await cleanAllTables();
+
+  // Suppress console.error for expected test errors (404s, 400s, etc.)
+  consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
   // Create an admin and login to get cookies + optional Bearer
   const admin = await UserModel.create({
@@ -94,9 +87,7 @@ beforeAll(async () => {
   const login = await agent
     .post('/api/auth/login')
     .send({ identifier: admin.username, password: 'pw' })
-    .expect((res) => {
-      expect([200]).toContain(res.status);
-    });
+    .expect(200);
 
   const { accessToken } = pickToken(login);
   adminBearer = accessToken ? `Bearer ${accessToken}` : '';
@@ -106,6 +97,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  consoleErrorSpy.mockRestore();
   await sequelize.close();
 });
 
@@ -145,14 +137,12 @@ describe('POST /api/orders (create)', () => {
       .expect(201);
 
     // Shape check
-    expect(res.body?.data?.order).toEqual(
-      expect.objectContaining({
-        orderId: expect.any(String),
-        status: expect.any(String),
-        currency: expect.any(String),
-        grandTotal: expect.any(String),
-      })
-    );
+    expect(res.body.data.order).toMatchObject({
+      orderId: expect.any(String),
+      status: expect.any(String),
+      currency: expect.any(String),
+      grandTotal: expect.any(String),
+    });
   });
 
   test('201 → creates an order with minimal payload', async () => {
@@ -173,18 +163,14 @@ describe('POST /api/orders (create)', () => {
       .post('/api/orders')
       .set('Authorization', adminBearer)
       .send(payload)
-      .expect((r) => {
-        expect([201, 200]).toContain(r.status);
-      });
+      .expect(201);
 
-    const order = res.body?.data?.order;
-    expect(order).toEqual(
-      expect.objectContaining({
-        userId: currentUserId,
-        currency: 'USD',
-        status: expect.any(String),
-      })
-    );
+    const order = res.body.data.order;
+    expect(order).toMatchObject({
+      userId: currentUserId,
+      currency: 'USD',
+      status: expect.any(String),
+    });
   });
 });
 
@@ -197,13 +183,11 @@ describe('GET /api/orders (list) & /api/orders/:id (getById)', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(res.body?.data?.orders).toBeDefined();
-    expect(res.body?.meta).toEqual(
-      expect.objectContaining({
-        page: 1,
-        pageSize: 5,
-      })
-    );
+    expect(res.body.data.orders).toBeDefined();
+    expect(res.body.meta).toMatchObject({
+      page: 1,
+      pageSize: 5,
+    });
   });
 
   test('200 → getById returns one order (w/ items array if present)', async () => {
@@ -214,20 +198,18 @@ describe('GET /api/orders (list) & /api/orders/:id (getById)', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    const order = res.body?.data?.order;
+    const order = res.body.data.order;
     expect(order).toBeDefined();
-    expect(order).toEqual(expect.objectContaining({ orderId: o.orderId }));
+    expect(order).toMatchObject({ orderId: o.orderId });
   });
 
-  test('404/500 → getById missing returns NotFound', async () => {
-    await agent
+  test('404 → getById missing returns NotFound', async () => {
+    const res = await agent
       .get(`/api/orders/${uuid()}`)
       .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .expect(404);
+
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
   });
 });
 
@@ -241,13 +223,11 @@ describe('PATCH orders (totals/contact/status/pickup-slot)', () => {
       .send({ subtotal: '5.00', taxTotal: '1.00', grandTotal: '6.00' })
       .expect(200);
 
-    expect(res.body?.data?.order).toEqual(
-      expect.objectContaining({
-        subtotal: '5.00',
-        taxTotal: '1.00',
-        grandTotal: '6.00',
-      })
-    );
+    expect(res.body.data.order).toMatchObject({
+      subtotal: '5.00',
+      taxTotal: '1.00',
+      grandTotal: '6.00',
+    });
   });
 
   test('200 → updateContact sets contact fields', async () => {
@@ -263,65 +243,53 @@ describe('PATCH orders (totals/contact/status/pickup-slot)', () => {
       })
       .expect(200);
 
-    expect(res.body?.data?.order).toEqual(
-      expect.objectContaining({
-        contactName: 'Grace Hopper',
-        contactPhone: '+15550003333',
-        notes: 'Leave at front desk',
-      })
-    );
+    expect(res.body.data.order).toMatchObject({
+      contactName: 'Grace Hopper',
+      contactPhone: '+15550003333',
+      notes: 'Leave at front desk',
+    });
   });
 
-  test('200/400/500 → changeStatus moves to next state or rejects', async () => {
+  test('400 → changeStatus rejects invalid status', async () => {
     const o = await seedOrder({ status: 'pending' });
 
     const res = await agent
       .patch(`/api/orders/${o.orderId}/status`)
       .set('Authorization', adminBearer)
-      .send({ status: 'confirmed' }) // some installs may reject this as invalid
-      .expect((r) => {
-        expect([200, 400, 500]).toContain(r.status);
-      });
+      .send({ status: 'invalid_status' })
+      .expect(400);
 
-    if (res.status === 200) {
-      expect(res.body?.data?.order?.status).toBe('confirmed');
-    } else {
-      const code = res.body?.code || res.body?.error?.code;
-      if (code)
-        expect(String(code)).toMatch(/^(BAD_REQUEST|VALIDATION_ERROR)$/i);
-    }
+    expect(res.body.code || res.body.error).toMatch(/BAD_REQUEST|VALIDATION/i);
   });
 
-  test('200/404/500 → setPickupSlot assigns/unassigns slot (random may 404)', async () => {
+  test('404 → setPickupSlot with non-existent slot', async () => {
     const o = await seedOrder();
 
-    // assign (random ID may be unknown → 404)
-    const assign = await agent
+    const res = await agent
       .patch(`/api/orders/${o.orderId}/pickup-slot`)
       .set('Authorization', adminBearer)
       .send({ pickupSlotId: uuid() })
-      .expect((r) => expect([200, 404, 500]).toContain(r.status));
+      .expect(404);
 
-    if (assign.status === 200) {
-      expect(assign.body?.data?.order?.pickupSlotId).toBeTruthy();
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
+  });
 
-      // unassign
-      const unassign = await agent
-        .patch(`/api/orders/${o.orderId}/pickup-slot`)
-        .set('Authorization', adminBearer)
-        .send({ pickupSlotId: null })
-        .expect(200);
-      expect(unassign.body?.data?.order?.pickupSlotId).toBeNull();
-    } else {
-      const code = assign.body?.code || assign.body?.error?.code;
-      if (code) expect(String(code)).toMatch(/NOT_FOUND/i);
-    }
+  test('200 → setPickupSlot unassigns with null', async () => {
+    const o = await seedOrder();
+
+    const res = await agent
+      .patch(`/api/orders/${o.orderId}/pickup-slot`)
+      .set('Authorization', adminBearer)
+      .send({ pickupSlotId: null })
+      .expect(200);
+
+    expect(res.body.data.order.pickupSlotId).toBeNull();
   });
 });
 
 describe('Self-scoped endpoints', () => {
   test('200 → /api/orders/self returns only current user orders', async () => {
-    // other user order to ensure filtering
+    // Create other user order to ensure filtering
     const otherUser = await UserModel.create({
       username: mkUsername('someone'),
       firstName: 'Other',
@@ -337,15 +305,27 @@ describe('Self-scoped endpoints', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    const orders = res.body?.data?.orders ?? [];
+    const orders = res.body.data.orders ?? [];
     expect(Array.isArray(orders)).toBe(true);
+
+    // All returned orders should belong to current user
     for (const o of orders) {
       expect(o.userId).toBe(currentUserId);
     }
   });
 
-  test('200/404/500 → /api/orders/self/:id returns order when owner or NotFound', async () => {
+  test('200 → /api/orders/self/:id returns own order', async () => {
     const mine = await seedOrder({ userId: currentUserId });
+
+    const res = await agent
+      .get(`/api/orders/self/${mine.orderId}`)
+      .set('Authorization', adminBearer)
+      .expect(200);
+
+    expect(res.body.data.order.orderId).toBe(mine.orderId);
+  });
+
+  test("404 → /api/orders/self/:id for another user's order", async () => {
     const otherUser = await UserModel.create({
       username: mkUsername('alt'),
       firstName: 'Alt',
@@ -355,21 +335,12 @@ describe('Self-scoped endpoints', () => {
     });
     const notMine = await seedOrder({ userId: otherUser.userId });
 
-    // my order → 200
-    await agent
-      .get(`/api/orders/self/${mine.orderId}`)
-      .set('Authorization', adminBearer)
-      .expect(200);
-
-    // someone else's order → 404 or 500 (middleware may normalize as 404)
-    await agent
+    const res = await agent
       .get(`/api/orders/self/${notMine.orderId}`)
       .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-        const code = res.body?.code || res.body?.error?.code;
-        if (code) expect(String(code)).toMatch(/^NOT_FOUND$/i);
-      });
+      .expect(404);
+
+    expect(res.body.code || res.body.error).toMatch(/NOT_FOUND/i);
   });
 });
 
@@ -382,14 +353,14 @@ describe('DELETE /api/orders/:orderId (remove)', () => {
       .set('Authorization', adminBearer)
       .expect(200);
 
-    expect(delRes.body?.data).toEqual({ deleted: true });
+    expect(delRes.body.data).toEqual({ deleted: true });
 
-    // subsequent get should now be 404/500
-    await agent
+    // Subsequent get should now be 404
+    const getRes = await agent
       .get(`/api/orders/${o.orderId}`)
       .set('Authorization', adminBearer)
-      .expect((res) => {
-        expect([404, 500]).toContain(res.status);
-      });
+      .expect(404);
+
+    expect(getRes.body.code || getRes.body.error).toMatch(/NOT_FOUND/i);
   });
 });

@@ -1,66 +1,17 @@
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeEach,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
-import { Op, UniqueConstraintError } from 'sequelize';
-
-// IMPORTANT: mock the tx module BEFORE importing the service
-const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
-
-await jest.unstable_mockModule('../../utils/tx.js', () => ({
-  // provide a jest.fn so we can adjust implementation later if needed
-  withTransaction: jest.fn(async (fn: any) => fn(fakeTx)),
-}));
-
-// Now import the mocked module and the subject under test
-const tx = await import('../../utils/tx.js');
-const { ProductImageService } = await import(
-  '../../services/product-image.service.js'
-);
-
-// These can be static imports; they don't depend on the mocked module
-import { ProductModel } from '../../models/product.model.js';
-import { ProductImageModel } from '../../models/product-image.model.js';
-
-import {
-  BadRequestError,
-  NotFoundError,
-  DuplicateError,
-} from '../../errors/index.js';
+// src/__tests__/services/product-image.service.spec.ts
 
 /**
- * NOTE ON TS-SAFE MOCKS
- * ---------------------
- * - For functions that resolve to void, prefer:
- *     mockImplementation(async () => undefined)
- *   instead of mockResolvedValue(undefined).
- *
- * - For functions that should reject with a specific error:
- *     mockImplementation(async () => { throw new SpecificError(...) })
- *   instead of mockRejectedValue(...).
+ * ProductImageService — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
  */
 
-// ---------- helpers ----------
+import { Op, UniqueConstraintError } from 'sequelize';
+
+/* ================================ Helpers ================================= */
+
 const mkId = (p = 'SKU') =>
   `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 const mkUrl = (n = '') => `https://cdn.example.com/img${n ? '-' + n : ''}.jpg`;
-
-// Ensure tx.withTransaction always calls the callback with our fake tx
-beforeEach(() => {
-  (tx.withTransaction as unknown as jest.Mock).mockImplementation(
-    async (fn: any) => fn(fakeTx)
-  );
-});
-
-afterEach(() => {
-  jest.restoreAllMocks();
-  jest.clearAllMocks();
-});
 
 // Build a minimal Sequelize "instance-like" object with save/set/toJSON
 // IMPORTANT: expose property accessors so direct assignments (e.g., existing.url = '...')
@@ -78,7 +29,7 @@ function makeImageRow(overrides: Partial<Record<string, any>> = {}) {
   const obj: any = {
     get: () => ({ ...state }),
     set: (patch: any) => Object.assign(state, patch),
-    save: jest.fn().mockImplementation(async () => undefined),
+    save: jest.fn(async () => undefined),
     toJSON: () => ({
       imageId: state.imageId,
       productId: state.productId,
@@ -110,7 +61,43 @@ function makeImageRow(overrides: Partial<Record<string, any>> = {}) {
   return obj;
 }
 
-// ---------- tests ----------
+/* ========================= Mock setup ========================= */
+
+const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
+const mockWithTransaction = jest.fn(async (fn: any) => fn(fakeTx));
+
+// Mock modules
+jest.mock('../../utils/tx.js', () => ({
+  withTransaction: mockWithTransaction,
+}));
+
+/* ========================= Import after mocks ========================= */
+
+import { ProductImageService } from '../../services/product-image.service.js';
+import { ProductModel } from '../../models/product.model.js';
+import { ProductImageModel } from '../../models/product-image.model.js';
+import {
+  BadRequestError,
+  NotFoundError,
+  DuplicateError,
+} from '../../errors/index.js';
+
+/* ================================ Lifecycle ================================= */
+
+beforeEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+  mockWithTransaction.mockClear();
+  mockWithTransaction.mockImplementation(async (fn: any) => fn(fakeTx));
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+});
+
+/* ================================= Tests ================================= */
+
 describe('ProductImageService.create', () => {
   test('creates image and returns plain JSON', async () => {
     const productId = mkId('SKU');
@@ -184,9 +171,11 @@ describe('ProductImageService.create', () => {
 
   test('UniqueConstraintError → DuplicateError', async () => {
     jest.spyOn(ProductModel, 'findByPk').mockResolvedValue({} as any);
-    jest.spyOn(ProductImageModel, 'create').mockImplementation(async () => {
-      throw new UniqueConstraintError({ message: 'dup', errors: [] } as any);
-    });
+    jest
+      .spyOn(ProductImageModel, 'create')
+      .mockRejectedValue(
+        new UniqueConstraintError({ message: 'dup', errors: [] } as any)
+      );
 
     await expect(
       ProductImageService.create({
@@ -281,9 +270,11 @@ describe('ProductImageService.update', () => {
   test('UniqueConstraintError on save → DuplicateError', async () => {
     const row = makeImageRow();
     jest.spyOn(ProductImageModel, 'findByPk').mockResolvedValue(row as any);
-    jest.spyOn(row, 'save').mockImplementation(async () => {
-      throw new UniqueConstraintError({ message: 'dup', errors: [] } as any);
-    });
+    jest
+      .spyOn(row, 'save')
+      .mockRejectedValue(
+        new UniqueConstraintError({ message: 'dup', errors: [] } as any)
+      );
 
     await expect(
       ProductImageService.update(row.get().imageId, { variant: 'back' as any })

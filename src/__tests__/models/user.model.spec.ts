@@ -1,13 +1,6 @@
 // src/__tests__/models/user.model.spec.ts
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  expect,
-  beforeAll,
-  afterAll,
-  afterEach,
-} from '@jest/globals';
+
+
 
 import { UniqueConstraintError } from 'sequelize';
 import { UserModel } from '../../models/user.model.js';

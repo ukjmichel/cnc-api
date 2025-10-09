@@ -31,8 +31,10 @@ import {
 
 type AnyError = Error & {
   status?: number;
+  statusCode?: number; // ← Added support for statusCode
   code?: string;
   details?: unknown;
+  isOperational?: boolean; // ← Added support for isOperational flag
   // for Sequelize
   errors?: Array<{ message: string; path?: string | null; value?: unknown }>;
   fields?: Record<string, unknown>;
@@ -42,14 +44,16 @@ type AnyError = Error & {
 };
 
 const isProd = process.env.NODE_ENV === 'production';
+const isTest = process.env.NODE_ENV === 'test';
 
 /** Map a thrown error → { status, error, message, details } */
 function normalize(err: AnyError) {
-  // 1) Custom domain errors that set `status` (e.g., BadRequestError, NotFoundError...)
-  if (typeof err.status === 'number') {
+  // 1) Custom domain errors that set `status` or `statusCode` (e.g., BadRequestError, NotFoundError...)
+  const httpStatus = err.statusCode || err.status;
+  if (typeof httpStatus === 'number') {
     return {
-      status: err.status,
-      error: err.code || codeFromStatus(err.status) || 'ERROR',
+      status: httpStatus,
+      error: err.code || codeFromStatus(httpStatus) || 'ERROR',
       message: err.message || 'Error',
       details: err.details,
     };
@@ -125,7 +129,7 @@ function normalize(err: AnyError) {
   };
 }
 
-/** Best-effort mapping when a custom error only sets `status` */
+/** Best-effort mapping when a custom error only sets `status` or `statusCode` */
 function codeFromStatus(status: number) {
   switch (status) {
     case 400:
@@ -159,17 +163,20 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ) {
-  // Log with basic request context (avoid noisy stack in prod logs if desired)
-  // You can replace with a proper logger (pino/winston) if available.
-  // eslint-disable-next-line no-console
-  console.error(
-    `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}\n`,
-    err
-  );
+  // Only log in non-test environments to avoid cluttering test output
+  if (!isTest) {
+    // Log with basic request context
+    // You can replace with a proper logger (pino/winston) if available.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}\n`,
+      err
+    );
+  }
 
   const norm = normalize(err);
 
-  // Don’t double-send if headers already committed
+  // Don't double-send if headers already committed
   if (res.headersSent) {
     return res.end();
   }

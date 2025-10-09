@@ -15,8 +15,7 @@
  *    • POST /api/stocks/rebuild (protected)
  */
 
-import 'reflect-metadata';
-import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
+
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';

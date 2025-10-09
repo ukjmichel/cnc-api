@@ -7,8 +7,7 @@
  * - Exercises: create, list, filter, by-code, getById, update, delete
  */
 
-import 'reflect-metadata';
-import { describe, test, beforeAll, afterAll, expect } from '@jest/globals';
+
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
 import { cleanAllTables } from '../../test-utils/mysql.js';

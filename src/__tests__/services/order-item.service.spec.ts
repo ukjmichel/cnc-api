@@ -1,54 +1,9 @@
 /**
  * OrderItemService — unit tests (pure Jest mocks; no DB)
+ * @jest-environment node
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  beforeEach,
-  afterEach,
-  expect,
-  jest,
-} from '@jest/globals';
-
-/* ---------------- ESM-safe mocks in the requested pattern ---------------- */
-
-const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
-
-await jest.unstable_mockModule('../../db/sequelize.js', () => ({
-  sequelize: {
-    transaction: jest.fn(async (fn: any) => fn(fakeTx)),
-  },
-}));
-
-// Explicit result type for the query mock
-type FilterItemsResult = {
-  items: { orderId: string; stockId: string }[];
-  total: number;
-  page: number;
-  pageSize: number;
-  pages: number;
-};
-
-// Give the mock an async function signature so mockResolvedValueOnce
-// expects FilterItemsResult (not never)
-const filterOrderItemsMock =
-  jest.fn<(...args: any[]) => Promise<FilterItemsResult>>();
-
-await jest.unstable_mockModule('../../queries/order-item.queries.js', () => ({
-  filterOrderItems: filterOrderItemsMock as any,
-}));
-
-const db = await import('../../db/sequelize.js');
-const { orderItemService } = await import(
-  '../../services/order-item.service.js'
-);
-
-import { OrderItemModel } from '../../models/order-item.model.js';
-import { StockModel } from '../../models/stock.model.js';
-import { StockMovementModel } from '../../models/stock-movement.model.js';
-import { BadRequestError, NotFoundError } from '../../errors/index.js';
+import type { ListOrderItemsResult } from '../../types/order-item.js';
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -105,12 +60,39 @@ function makeStockRow(state: Record<string, any>) {
   return row;
 }
 
+/* ---------------- Mock setup ---------------- */
+
+const fakeTx: any = { LOCK: { UPDATE: 'UPDATE' } };
+const mockTransaction = jest.fn(async (fn: any) => fn(fakeTx));
+
+const filterOrderItemsMock = jest.fn<Promise<ListOrderItemsResult>, [any]>();
+
+// Mock the modules
+jest.mock('../../db/sequelize.js', () => ({
+  sequelize: {
+    transaction: mockTransaction,
+  },
+}));
+
+jest.mock('../../queries/order-item.queries.js', () => ({
+  filterOrderItems: filterOrderItemsMock,
+}));
+
+/* ---------------- Import after mocks ---------------- */
+
+import { orderItemService } from '../../services/order-item.service.js';
+import { OrderItemModel } from '../../models/order-item.model.js';
+import { StockModel } from '../../models/stock.model.js';
+import { StockMovementModel } from '../../models/stock-movement.model.js';
+import { BadRequestError, NotFoundError } from '../../errors/index.js';
+
 /* -------------------------------- lifecycle ------------------------------ */
 
 beforeEach(() => {
-  (db.sequelize.transaction as unknown as jest.Mock).mockImplementation(
-    async (fn: any) => fn(fakeTx)
-  );
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+  mockTransaction.mockClear();
+  mockTransaction.mockImplementation(async (fn: any) => fn(fakeTx));
   filterOrderItemsMock.mockReset();
 });
 
@@ -118,7 +100,6 @@ afterEach(() => {
   jest.restoreAllMocks();
   jest.clearAllMocks();
 });
-
 
 /* --------------------------------- tests --------------------------------- */
 
@@ -137,7 +118,7 @@ describe('validateStockAvailable', () => {
 
     expect(spy).toHaveBeenCalledWith(
       'S1',
-      expect.objectContaining({ transaction: fakeTx, lock: fakeTx.LOCK.UPDATE })
+      expect.objectContaining({ transaction: fakeTx, lock: 'UPDATE' })
     );
     expect(out).toBe(stock);
   });
@@ -238,14 +219,14 @@ describe('create', () => {
       quantity: '1.25', // → '1.250'
     });
 
-    expect(db.sequelize.transaction as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(moveSpy).toHaveBeenCalled();
 
     expect(OrderItemModel.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { orderId: 'ORD-1', stockId: 'S1' },
         transaction: fakeTx,
-        lock: fakeTx.LOCK.UPDATE,
+        lock: 'UPDATE',
       })
     );
     expect(OrderItemModel.create).toHaveBeenCalledWith(
@@ -366,7 +347,7 @@ describe('createMany', () => {
       { orderId: 'O1', stockId: 'S2', quantity: '0.500' },
     ]);
 
-    expect(db.sequelize.transaction as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(valSpy).toHaveBeenCalledTimes(2);
     expect(moveSpy).toHaveBeenCalledTimes(2);
     expect(createSpy).toHaveBeenCalledTimes(2);
@@ -501,7 +482,7 @@ describe('remove', () => {
 describe('filter & listByOrder (delegates to query layer)', () => {
   test('filter → calls filterOrderItems and returns result', async () => {
     filterOrderItemsMock.mockResolvedValueOnce({
-      items: [{ orderId: 'O1', stockId: 'S1' }],
+      items: [{ orderId: 'O1', stockId: 'S1' }] as any,
       total: 1,
       page: 1,
       pageSize: 20,
@@ -512,8 +493,8 @@ describe('filter & listByOrder (delegates to query layer)', () => {
       page: 1,
       pageSize: 20,
       orderBy: 'createdAt',
-      orderDir: 'DESC',
-    } as any);
+      orderDir: 'desc',
+    });
 
     expect(filterOrderItemsMock).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, pageSize: 20 })
@@ -523,7 +504,7 @@ describe('filter & listByOrder (delegates to query layer)', () => {
 
   test('listByOrder → injects orderId into filters and delegates', async () => {
     filterOrderItemsMock.mockResolvedValueOnce({
-      items: [{ orderId: 'O9', stockId: 'S9' }],
+      items: [{ orderId: 'O9', stockId: 'S9' }] as any,
       total: 1,
       page: 1,
       pageSize: 10,
@@ -534,7 +515,7 @@ describe('filter & listByOrder (delegates to query layer)', () => {
       page: 1,
       pageSize: 10,
       filters: { stockId: 'S9' },
-    } as any);
+    });
 
     expect(filterOrderItemsMock).toHaveBeenCalledWith(
       expect.objectContaining({

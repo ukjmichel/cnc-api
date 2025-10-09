@@ -9,15 +9,8 @@
  * =============================================================================
  */
 
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  expect,
-  beforeAll,
-  afterAll,
-  afterEach,
-} from '@jest/globals';
+
+
 
 import { Sequelize } from 'sequelize-typescript';
 import { UniqueConstraintError, ValidationError } from 'sequelize';

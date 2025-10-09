@@ -1,13 +1,5 @@
 // src/__tests__/routes/auth.route.e2e.spec.ts
-import 'reflect-metadata';
-import {
-  describe,
-  test,
-  expect,
-  beforeAll,
-  afterAll,
-  afterEach,
-} from '@jest/globals';
+
 
 import request from 'supertest';
 import { sequelize } from '../../db/sequelize.js';
