@@ -32,6 +32,7 @@ import { vGlobalFilter } from './validators/order-item.validators.js';
 
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './docs/swagger.js';
+import barcodeRouter from './routes/barcode.route.js';
 
 export const app = express();
 
@@ -80,6 +81,7 @@ app.use('/api/product-images', productImageRouter);
 app.use('/api/stocks', stockRouter);
 app.use('/api/pickup-slots', pickupSlotRouter);
 app.use('/api/orders', orderRouter);
+app.use('/api/barcode', barcodeRouter);
 
 // Global order-items filter/search (mounted separately, not nested)
 app.get(
