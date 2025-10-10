@@ -58,6 +58,19 @@ export const config = {
     idle: envToInt(process.env.MYSQL_POOL_IDLE, 10_000),
   },
 
+  // ─── MongoDB Configuration ───────────────────
+  mongoHost: requireEnv('MONGO_HOST'),
+  mongoPort: envToInt(process.env.MONGO_PORT, 27017),
+  hostMongoPort: envToInt(process.env.HOST_MONGO_PORT, 27017),
+  mongoDatabase: requireEnv('MONGO_DATABASE'),
+  mongoUsername: requireEnv('MONGO_USERNAME'),
+  mongoPassword: requireEnv('MONGO_PASSWORD'),
+  mongoRootUsername: process.env.MONGO_ROOT_USERNAME,
+  mongoRootPassword: process.env.MONGO_ROOT_PASSWORD,
+  mongoAuthSource: process.env.MONGO_AUTH_SOURCE ?? 'admin',
+  /** Optional: Full MongoDB connection URI (overrides individual params if provided). */
+  mongoUri: process.env.MONGO_URI,
+
   // ─── JWT Auth Configuration ──────────────────
   jwtSecret: requireEnv('JWT_SECRET'),
   jwtRefreshSecret: requireEnv('JWT_REFRESH_SECRET'),

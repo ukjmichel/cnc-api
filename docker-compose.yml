@@ -25,6 +25,28 @@ services:
       retries: 10
     restart: unless-stopped
 
+  mongodb:
+    image: mongo:7.0
+    container_name: cnc_mongodb
+    env_file:
+      - .env
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-root_password}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-appdb}
+      TZ: UTC
+    ports:
+      - '${HOST_MONGO_PORT:-27017}:27017'
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', 'db.adminCommand("ping")']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   db-init:
     image: mysql:8.0
     container_name: cnc_mysql_init
@@ -59,6 +81,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
       db-init:
         condition: service_completed_successfully
     ports:
@@ -70,11 +94,10 @@ services:
       - ./jest.setup.env.ts:/usr/src/app/jest.setup.env.ts
       - ./tsconfig.json:/usr/src/app/tsconfig.json
       - ./tsconfig.jest.json:/usr/src/app/tsconfig.jest.json
-      # Node modules and uploads
-      - node_modules:/usr/src/app/node_modules
+      # Uploads directory only
       - ./uploads:/usr/src/app/uploads
     restart: unless-stopped
 
 volumes:
   mysql_data:
-  node_modules:
+  mongodb_data:
